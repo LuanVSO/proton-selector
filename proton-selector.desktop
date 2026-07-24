@@ -1,0 +1,26 @@
+[Desktop Entry]
+Type=Application
+Name=Proton Selector
+Comment=Choose the Proton build used by Steam
+Comment[ar]=اختر إصدار Proton الذي يستخدمه Steam
+Comment[cs]=Vyberte sestavení Protonu používané službou Steam
+Comment[de]=Wählen Sie die von Steam verwendete Proton-Version
+Comment[es]=Elige la versión de Proton que usa Steam
+Comment[fr]=Choisissez la version de Proton utilisée par Steam
+Comment[it]=Scegli la versione di Proton usata da Steam
+Comment[ja]=Steam で使用する Proton ビルドを選択
+Comment[ko]=Steam에서 사용할 Proton 빌드 선택
+Comment[nl]=Kies de Proton-versie die Steam gebruikt
+Comment[pl]=Wybierz wersję Proton używaną przez Steam
+Comment[pt_BR]=Escolha a versão do Proton usada pelo Steam
+Comment[ru]=Выберите версию Proton для Steam
+Comment[tr]=Steam tarafından kullanılacak Proton sürümünü seçin
+Comment[uk]=Виберіть версію Proton для Steam
+Comment[zh_CN]=选择 Steam 使用的 Proton 版本
+Comment[zh_TW]=選擇 Steam 使用的 Proton 版本
+Exec=proton-selector
+Icon=steam
+Terminal=false
+Categories=Utility;
+Keywords=Steam;Proton;Wine;Compatibility;
+StartupNotify=true
