@@ -8,9 +8,12 @@ Kirigami.ApplicationWindow {
     property var appController: protonSelector
 
     width: 720
-    height: 760
+    height: Math.max(
+        minimumHeight,
+        page.implicitHeight + Kirigami.Units.gridUnit * 2
+    )
     minimumWidth: 520
-    minimumHeight: 560
+    minimumHeight: 400
     title: "Proton Selector"
 
     pageStack.initialPage: Kirigami.ScrollablePage {
