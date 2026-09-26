@@ -84,11 +84,32 @@ lookup_game_copy()
     candidate="$selector_dir/games/$managed_directory"
     [ -x "$candidate/proton" ] || return 1
     selected="$candidate"
-    PROTON_SELECTOR_GAME_ID="$game_id"
-    export PROTON_SELECTOR_GAME_ID
     return 0
 }
 
+apply_proton_environment_file()
+{
+    environment_file=$1
+    [ -f "$environment_file" ] || return 0
+    while IFS= read -r entry || [ -n "$entry" ]; do
+        case "$entry" in
+            *=*) variable=${entry%%=*}; value=${entry#*=} ;;
+            *)   variable=$entry; value=1 ;;
+        esac
+        case "$variable" in
+            PROTON_[A-Z]*) ;;
+            *) continue ;;
+        esac
+        case "$variable" in
+            *[!A-Z0-9_]*) continue ;;
+        esac
+        if [ -n "$variable" ]; then
+            export "$variable=$value"
+        fi
+    done < "$environment_file"
+}
+
+launch_game_id=""
 for candidate_id in \
     "${SteamGameId-}" \
     "${GAMEID-}" \
@@ -96,7 +117,15 @@ for candidate_id in \
     "${STEAM_COMPAT_APP_ID-}" \
     "${SteamAppId-}"
 do
+    [ -n "$candidate_id" ] || continue
+    case "$candidate_id" in
+        *[!a-zA-Z0-9._:-]*) continue ;;
+    esac
+    if [ -z "$launch_game_id" ]; then
+        launch_game_id=$candidate_id
+    fi
     if lookup_game_copy "$candidate_id"; then
+        launch_game_id=$candidate_id
         break
     fi
 done
@@ -134,23 +163,12 @@ if [ "${STEAM_COMPAT_TOOL_PATH+x}" = x ]; then
     export STEAM_COMPAT_TOOL_PATH
 fi
 
-if [ -f "$selector_dir/proton-environment" ]; then
-    while IFS= read -r entry || [ -n "$entry" ]; do
-        case "$entry" in
-            *=*) variable=${entry%%=*}; value=${entry#*=} ;;
-            *)   variable=$entry; value=1 ;;
-        esac
-        case "$variable" in
-            PROTON_[A-Z]*) ;;
-            *) continue ;;
-        esac
-        case "$variable" in
-            *[!A-Z0-9_]*) continue ;;
-        esac
-        if [ -n "$variable" ]; then
-            export "$variable=$value"
-        fi
-    done < "$selector_dir/proton-environment"
+apply_proton_environment_file "$selector_dir/proton-environment"
+if [ -n "$launch_game_id" ]; then
+    PROTON_SELECTOR_GAME_ID="$launch_game_id"
+    export PROTON_SELECTOR_GAME_ID
+    apply_proton_environment_file \
+        "$selector_dir/game-environment/$launch_game_id.env"
 fi
 
 PROTON_SELECTOR_TARGET="$selected"
@@ -970,6 +988,42 @@ def _source_metadata(tool: ProtonTool) -> dict[str, object]:
     }
 
 
+def _read_proton_environment_file(path: Path) -> dict[str, str]:
+    try:
+        entries = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    variables = {}
+    for entry in entries:
+        if "=" in entry:
+            name, value = entry.split("=", 1)
+        else:
+            name, value = entry, "1"
+        if PROTON_ENVIRONMENT_VARIABLE_PATTERN.fullmatch(name):
+            variables[name] = value
+    return variables
+
+
+def _proton_environment_file_contents(
+    variables: Mapping[str, str] | Iterable[str],
+) -> str:
+    entries = (
+        variables.items()
+        if isinstance(variables, Mapping)
+        else ((name, "1") for name in variables)
+    )
+    configured = {}
+    for name, value in entries:
+        value = str(value)
+        if (
+            PROTON_ENVIRONMENT_VARIABLE_PATTERN.fullmatch(name)
+            and "\n" not in value
+            and "\r" not in value
+        ):
+            configured[name] = value
+    return "".join(f"{name}={configured[name]}\n" for name in sorted(configured))
+
+
 def _copy_is_current(destination: Path, tool: ProtonTool) -> bool:
     destination_launcher = destination / "proton"
     if (
@@ -1015,24 +1069,11 @@ class SelectorManager:
         self.games_dir = self.tool_path / "games"
         self.game_mappings_path = self.tool_path / GAME_MAPPINGS_CSV
         self.proton_environment_path = self.tool_path / "proton-environment"
+        self.game_environment_dir = self.tool_path / "game-environment"
         self.legacy_adapter_path = data_home(self.home, self.env) / "tool"
 
     def proton_environment_variables(self) -> dict[str, str]:
-        try:
-            entries = self.proton_environment_path.read_text(
-                encoding="utf-8"
-            ).splitlines()
-        except OSError:
-            return {}
-        variables = {}
-        for entry in entries:
-            if "=" in entry:
-                name, value = entry.split("=", 1)
-            else:
-                name, value = entry, "1"
-            if PROTON_ENVIRONMENT_VARIABLE_PATTERN.fullmatch(name):
-                variables[name] = value
-        return variables
+        return _read_proton_environment_file(self.proton_environment_path)
 
     def proton_environment_options(self) -> set[str]:
         return set(self.proton_environment_variables())
@@ -1041,27 +1082,64 @@ class SelectorManager:
         self,
         variables: Mapping[str, str] | Iterable[str],
     ) -> None:
-        entries = (
-            variables.items()
-            if isinstance(variables, Mapping)
-            else ((name, "1") for name in variables)
-        )
-        configured = {}
-        for name, value in entries:
-            value = str(value)
-            if (
-                PROTON_ENVIRONMENT_VARIABLE_PATTERN.fullmatch(name)
-                and "\n" not in value
-                and "\r" not in value
-            ):
-                configured[name] = value
         _atomic_write(
             self.proton_environment_path,
-            "".join(
-                f"{name}={configured[name]}\n"
-                for name in sorted(configured)
-            ),
+            _proton_environment_file_contents(variables),
         )
+
+    def game_proton_environment_variables(self, game_id: str) -> dict[str, str]:
+        normalized = normalize_game_id(game_id)
+        if not normalized:
+            return {}
+        return _read_proton_environment_file(
+            self.game_environment_dir / f"{normalized}.env"
+        )
+
+    def all_game_proton_environment_variables(self) -> dict[str, dict[str, str]]:
+        try:
+            files = self.game_environment_dir.glob("*.env")
+            return {
+                game_id: _read_proton_environment_file(path)
+                for path in files
+                if (game_id := normalize_game_id(path.stem))
+            }
+        except OSError:
+            return {}
+
+    def save_game_proton_environment(
+        self,
+        game_id: str,
+        variables: Mapping[str, str],
+    ) -> None:
+        normalized = normalize_game_id(game_id)
+        if not normalized:
+            return
+        environment_path = self.game_environment_dir / f"{normalized}.env"
+        contents = _proton_environment_file_contents(variables)
+        if not contents:
+            environment_path.unlink(missing_ok=True)
+            return
+        self.game_environment_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_write(environment_path, contents)
+
+    def save_game_proton_environments(
+        self,
+        environments: Mapping[str, Mapping[str, str]],
+    ) -> None:
+        configured = {}
+        for game_id, variables in environments.items():
+            normalized = normalize_game_id(game_id)
+            contents = _proton_environment_file_contents(variables)
+            if normalized and contents:
+                configured[normalized] = contents
+        if self.game_environment_dir.is_dir():
+            for path in self.game_environment_dir.glob("*.env"):
+                if path.stem not in configured:
+                    path.unlink(missing_ok=True)
+        elif configured:
+            self.game_environment_dir.mkdir(parents=True, exist_ok=True)
+        for game_id, contents in configured.items():
+            _atomic_write(self.game_environment_dir / f"{game_id}.env", contents)
 
     def find_base(self, tools: Iterable[ProtonTool]) -> ProtonTool | None:
         exact = [tool for tool in tools if tool.display_name == self.base_name]
@@ -1319,6 +1397,7 @@ class SelectorManager:
         game_tool: ProtonTool | None = None,
         progress: Callable[[str], None] | None = None,
         proton_environment: Mapping[str, str] | Iterable[str] | None = None,
+        game_proton_environment: Mapping[str, Mapping[str, str]] | None = None,
     ) -> ActivationResult:
         progress = progress or (lambda _message: None)
         selected_path = self._validate_source(
@@ -1423,6 +1502,8 @@ class SelectorManager:
 
         if proton_environment is not None:
             self.save_proton_environment(proton_environment)
+        if game_proton_environment is not None:
+            self.save_game_proton_environments(game_proton_environment)
         progress(_("ready"))
         return ActivationResult(
             first_activation=not already_registered,

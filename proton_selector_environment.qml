@@ -30,6 +30,7 @@ Kirigami.ApplicationWindow {
             return environmentPage.selector.protonEnvironmentVariables.filter(
                 function(variable) {
                     var searchableText = variable.name + " " + variable.value
+                        + " " + variable.inheritedValue
                     return searchableText.toLocaleLowerCase().includes(query)
                 }
             )
@@ -40,6 +41,25 @@ Kirigami.ApplicationWindow {
         ColumnLayout {
             width: environmentPage.width
             spacing: Kirigami.Units.largeSpacing
+
+            RowLayout {
+                Layout.fillWidth: true
+
+                Controls.Label {
+                    text: "Apply to"
+                }
+
+                Controls.ComboBox {
+                    Layout.fillWidth: true
+                    model: environmentPage.selector.environmentScopes
+                    textRole: "label"
+                    currentIndex: environmentPage.selector.environmentScopeIndex
+                    onActivated: environmentPage.selector.setEnvironmentScopeIndex(
+                        currentIndex
+                    )
+                    Accessible.name: "Environment variable scope"
+                }
+            }
 
             Controls.TextField {
                 id: variableSearchField
@@ -88,7 +108,9 @@ Kirigami.ApplicationWindow {
                         Layout.fillWidth: true
                         Layout.minimumWidth: 150
                         text: modelData.value
-                        placeholderText: "Not set"
+                        placeholderText: modelData.inheritedValue.length > 0
+                            ? "Inherited: " + modelData.inheritedValue
+                            : "Not set"
                         enabled: !environmentPage.selector.copying
                         onEditingFinished: environmentPage.selector.setProtonEnvironmentVariable(
                             modelData.name,

@@ -37,6 +37,7 @@ class SelectorController(QObject):
         self._game_index = -1
         self._game_id = ""
         self._game_id_error = ""
+        self._environment_game_id = ""
         self._copying = False
         self._wineland_updating = False
         self._wineland_variant = "normal"
@@ -48,7 +49,11 @@ class SelectorController(QObject):
         self._notification_is_error = False
         self._notification_visible = False
         self._proton_environment_values = self.manager.proton_environment_variables()
+        self._game_proton_environment_values = (
+            self.manager.all_game_proton_environment_variables()
+        )
         self._available_proton_environment_variables: tuple[str, ...] = ()
+        self._environment_version_name = "—"
         language_override = os.environ.get("PROTON_SELECTOR_LANGUAGE", "")
         if language_override:
             self.language_preference = backend._.language
@@ -126,19 +131,55 @@ class SelectorController(QObject):
         return dict(self.backend._.catalog)
 
     @Property("QVariantList", notify=stateChanged)
+    def environmentScopes(self) -> list[dict[str, str]]:
+        return [
+            {"gameId": "", "label": "All games (default)"},
+            *[
+                {
+                    "gameId": game.game_id,
+                    "label": f"{game.name} ({game.game_id})",
+                }
+                for game in self._installed_games
+            ],
+        ]
+
+    @Property(int, notify=stateChanged)
+    def environmentScopeIndex(self) -> int:
+        return next(
+            (
+                index
+                for index, scope in enumerate(self.environmentScopes)
+                if scope["gameId"] == self._environment_game_id
+            ),
+            0,
+        )
+
+    @Property("QVariantList", notify=stateChanged)
     def protonEnvironmentVariables(self) -> list[dict[str, str]]:
+        game_values = self._game_proton_environment_values.get(
+            self._environment_game_id,
+            {},
+        )
         return [
             {
                 "name": name,
-                "value": self._proton_environment_values.get(name, ""),
+                "value": (
+                    game_values.get(name, "")
+                    if self._environment_game_id
+                    else self._proton_environment_values.get(name, "")
+                ),
+                "inheritedValue": (
+                    self._proton_environment_values.get(name, "")
+                    if self._environment_game_id
+                    else ""
+                ),
             }
             for name in self._available_proton_environment_variables
         ]
 
     @Property(str, notify=stateChanged)
     def activeVersionName(self) -> str:
-        tool = self._tool_at(self._active_index)
-        return tool.display_name if tool else "—"
+        return self._environment_version_name
 
     @Property("QVariantList", notify=stateChanged)
     def languageOptions(self) -> list[str]:
@@ -337,12 +378,44 @@ class SelectorController(QObject):
             return
         if name not in self._available_proton_environment_variables:
             return
-        if value:
-            self._proton_environment_values[name] = value
+        if self._environment_game_id:
+            game_values = self._game_proton_environment_values.setdefault(
+                self._environment_game_id,
+                {},
+            )
+            if value:
+                game_values[name] = value
+            else:
+                game_values.pop(name, None)
+            if not game_values:
+                self._game_proton_environment_values.pop(
+                    self._environment_game_id,
+                    None,
+                )
+            if self.manager.tool_path.is_dir() and not self.manager.tool_path.is_symlink():
+                self.manager.save_game_proton_environment(
+                    self._environment_game_id,
+                    self._game_proton_environment_values.get(
+                        self._environment_game_id,
+                        {},
+                    ),
+                )
         else:
-            self._proton_environment_values.pop(name, None)
-        if self.manager.tool_path.is_dir() and not self.manager.tool_path.is_symlink():
-            self.manager.save_proton_environment(self._proton_environment_values)
+            if value:
+                self._proton_environment_values[name] = value
+            else:
+                self._proton_environment_values.pop(name, None)
+            if self.manager.tool_path.is_dir() and not self.manager.tool_path.is_symlink():
+                self.manager.save_proton_environment(self._proton_environment_values)
+        self.stateChanged.emit()
+
+    @Slot(int)
+    def setEnvironmentScopeIndex(self, index: int) -> None:
+        scopes = self.environmentScopes
+        if self.copying or index < 0 or index >= len(scopes):
+            return
+        self._environment_game_id = scopes[index]["gameId"]
+        self._update_proton_environment_variables()
         self.stateChanged.emit()
 
     @Slot()
@@ -393,6 +466,11 @@ class SelectorController(QObject):
         self._game_index = self._preferred_index(game_path)
         if self._game_index < 0:
             self._game_index = self._active_index
+        if self._environment_game_id and not any(
+            game.game_id == self._environment_game_id
+            for game in self._installed_games
+        ):
+            self._environment_game_id = ""
         self._sync_wineland_variant()
         self._update_proton_environment_variables()
         self.stateChanged.emit()
@@ -445,6 +523,10 @@ class SelectorController(QObject):
                 game_id,
                 game_tool,
                 dict(self._proton_environment_values),
+                {
+                    game_id: dict(values)
+                    for game_id, values in self._game_proton_environment_values.items()
+                },
             ),
             daemon=True,
         ).start()
@@ -538,12 +620,28 @@ class SelectorController(QObject):
         return self.tools[index] if 0 <= index < len(self.tools) else None
 
     def _update_proton_environment_variables(self) -> None:
-        tool = self._tool_at(self._active_index)
+        tool = self._environment_proton_source()
+        self._environment_version_name = tool[0] if tool else "—"
         self._available_proton_environment_variables = (
-            self.backend.proton_environment_variables(tool.path)
+            self.backend.proton_environment_variables(tool[1])
             if tool
             else ()
         )
+
+    def _environment_proton_source(self) -> tuple[str, Path] | None:
+        if self._environment_game_id:
+            mapping = self.manager.game_mapping(self._environment_game_id)
+            if mapping:
+                game_copy = self.manager.games_dir / mapping.managed_directory
+                source = (
+                    game_copy
+                    if (game_copy / "proton").is_file()
+                    else Path(mapping.source_path)
+                )
+                if (source / "proton").is_file():
+                    return mapping.proton_name, source
+        tool = self._tool_at(self._active_index)
+        return (tool.display_name, tool.path) if tool else None
 
     def _sync_wineland_variant(self) -> None:
         if self._wineland_variant_user_selected:
@@ -645,6 +743,7 @@ class SelectorController(QObject):
         game_id: str,
         game_tool: Any | None,
         proton_environment: dict[str, str],
+        game_proton_environment: dict[str, dict[str, str]],
     ) -> None:
         result = None
         error = None
@@ -657,6 +756,7 @@ class SelectorController(QObject):
                 game_tool=game_tool,
                 progress=self._copyProgress.emit,
                 proton_environment=proton_environment,
+                game_proton_environment=game_proton_environment,
             )
         except Exception as caught:
             error = caught
