@@ -69,43 +69,48 @@ Kirigami.ApplicationWindow {
 
             }
 
-            Controls.Button {
-                Layout.alignment: Qt.AlignLeft
-                text: "Game Versions..."
-                icon.name: "applications-games"
-                enabled: !page.selector.copying
-                onClicked: page.selector.openGameWindow()
-            }
-
-            Controls.Label {
+            RowLayout {
                 Layout.fillWidth: true
-                text: "Common Proton Environment Options"
-                font.bold: true
+
+                Controls.Label {
+                    text: "Proton Wineland"
+                }
+
+                Controls.ComboBox {
+                    Layout.fillWidth: true
+                    model: page.selector.winelandVariants
+                    textRole: "label"
+                    currentIndex: page.selector.winelandVariantIndex
+                    enabled: !page.selector.copying
+                    onActivated: page.selector.setWinelandVariantIndex(currentIndex)
+                    Accessible.name: "Proton Wineland variant"
+                }
+
+                Controls.Button {
+                    text: page.selector.winelandUpdating
+                        ? "Updating..."
+                        : "Update"
+                    icon.name: "view-refresh"
+                    enabled: !page.selector.copying
+                    onClicked: page.selector.updateWineland()
+                }
             }
 
-            Repeater {
-                model: page.selector.protonEnvironmentOptions
+            RowLayout {
+                Layout.fillWidth: true
 
-                delegate: RowLayout {
-                    Layout.fillWidth: true
-                    spacing: Kirigami.Units.largeSpacing
+                Controls.Button {
+                    text: "Game Versions..."
+                    icon.name: "applications-games"
+                    enabled: !page.selector.copying
+                    onClicked: page.selector.openGameWindow()
+                }
 
-                    Controls.Switch {
-                        checked: modelData.enabled
-                        enabled: !page.selector.copying
-                        text: modelData.name
-                        onToggled: page.selector.setProtonEnvironmentOption(
-                            modelData.name,
-                            checked
-                        )
-                        Accessible.name: modelData.name
-                    }
-
-                    Controls.Label {
-                        Layout.fillWidth: true
-                        text: modelData.description
-                        wrapMode: Text.WordWrap
-                    }
+                Controls.Button {
+                    text: "Proton Environment..."
+                    icon.name: "preferences-system"
+                    enabled: !page.selector.copying
+                    onClicked: page.selector.openEnvironmentWindow()
                 }
             }
 

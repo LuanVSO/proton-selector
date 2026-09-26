@@ -15,8 +15,12 @@ import platform
 import re
 import shutil
 import sys
+import tarfile
+import tempfile
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable, Iterable, Mapping
 
 from proton_selector_i18n import (
@@ -131,12 +135,21 @@ if [ "${STEAM_COMPAT_TOOL_PATH+x}" = x ]; then
 fi
 
 if [ -f "$selector_dir/proton-environment" ]; then
-    while IFS= read -r variable || [ -n "$variable" ]; do
-        case "$variable" in
-            PROTON_NO_ESYNC|PROTON_NO_FSYNC|PROTON_USE_WINED3D|PROTON_LOG|PROTON_HIDE_NVIDIA_GPU|PROTON_ENABLE_NVAPI)
-                export "$variable=1"
-                ;;
+    while IFS= read -r entry || [ -n "$entry" ]; do
+        case "$entry" in
+            *=*) variable=${entry%%=*}; value=${entry#*=} ;;
+            *)   variable=$entry; value=1 ;;
         esac
+        case "$variable" in
+            PROTON_[A-Z]*) ;;
+            *) continue ;;
+        esac
+        case "$variable" in
+            *[!A-Z0-9_]*) continue ;;
+        esac
+        if [ -n "$variable" ]; then
+            export "$variable=$value"
+        fi
     done < "$selector_dir/proton-environment"
 fi
 
@@ -145,14 +158,16 @@ export PROTON_SELECTOR_TARGET
 exec "$selected/proton" "$@"
 '''
 
-PROTON_ENVIRONMENT_OPTIONS = (
-    "PROTON_NO_ESYNC",
-    "PROTON_NO_FSYNC",
-    "PROTON_USE_WINED3D",
-    "PROTON_LOG",
-    "PROTON_HIDE_NVIDIA_GPU",
-    "PROTON_ENABLE_NVAPI",
+PROTON_ENVIRONMENT_VARIABLE_PATTERN = re.compile(r"\bPROTON_[A-Z][A-Z0-9_]*\b")
+WINELAND_RELEASE_API = (
+    "https://api.github.com/repos/nanomatters/proton-cachyos/releases/latest"
 )
+WINELAND_INSTALLS = {
+    "normal": ("Proton Wineland", "Proton Wineland"),
+    "v3": ("Proton Wineland v3", "Proton Wineland v3"),
+    "wow64": ("Proton Wineland WoW64", "Proton Wineland WoW64"),
+}
+WINELAND_MANAGED_MARKER = ".proton-selector-wineland.json"
 
 
 @dataclass(frozen=True)
@@ -470,6 +485,324 @@ def scan_proton_tools(
     )
 
 
+def proton_wineland_variant(tool: ProtonTool) -> str | None:
+    for variant, (_display_name, directory_name) in WINELAND_INSTALLS.items():
+        if tool.path.name == directory_name:
+            return variant
+    for name in (tool.path.name, tool.display_name):
+        if not name.startswith("proton-wineland-"):
+            continue
+        if name.endswith("_v3"):
+            return "v3"
+        if name.endswith("_wow64"):
+            return "wow64"
+        if re.fullmatch(r"proton-wineland-.+-x86_64", name):
+            return "normal"
+    return None
+
+
+def installed_proton_wineland_variants(compatibility_dir: Path) -> set[str]:
+    variants = set()
+    for variant, (_display_name, directory_name) in WINELAND_INSTALLS.items():
+        install_path = compatibility_dir / directory_name
+        marker_path = install_path / WINELAND_MANAGED_MARKER
+        if install_path.is_symlink() or marker_path.is_symlink() or not marker_path.is_file():
+            continue
+        try:
+            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if marker.get("variant") == variant:
+            variants.add(variant)
+
+    variants.update(
+        variant
+        for tool in scan_custom_tools([compatibility_dir])
+        if (variant := proton_wineland_variant(tool)) is not None
+    )
+    return variants
+
+
+def proton_environment_variables(proton_path: Path) -> tuple[str, ...]:
+    source = _read_text(proton_path / "proton")
+    return tuple(sorted(set(PROTON_ENVIRONMENT_VARIABLE_PATTERN.findall(source))))
+
+
+def _safe_extract_tar(archive_path: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    root = destination.resolve()
+
+    def normalize_link(base: tuple[str, ...], link_name: str) -> tuple[str, ...]:
+        link = PurePosixPath(link_name)
+        if link.is_absolute():
+            raise RuntimeError("The Wineland archive contains an absolute link.")
+        parts = list(base)
+        for part in link.parts:
+            if part in {"", "."}:
+                continue
+            if part == "..":
+                if not parts:
+                    raise RuntimeError("The Wineland archive contains an unsafe link.")
+                parts.pop()
+            else:
+                parts.append(part)
+        if not parts:
+            raise RuntimeError("The Wineland archive contains an unsafe link.")
+        return tuple(parts)
+
+    with tarfile.open(archive_path, mode="r:xz") as archive:
+        entries = []
+        path_kinds: dict[tuple[str, ...], str] = {}
+        for member in archive.getmembers():
+            relative = PurePosixPath(member.name)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise RuntimeError("The Wineland archive contains an unsafe path.")
+            parts = tuple(part for part in relative.parts if part not in {"", "."})
+            if not parts and member.isdir():
+                continue
+            if not parts:
+                raise RuntimeError("The Wineland archive contains an unsafe path.")
+            if member.isdir():
+                kind = "directory"
+            elif member.isfile():
+                kind = "file"
+            elif member.issym():
+                kind = "symlink"
+            elif member.islnk():
+                kind = "hardlink"
+            else:
+                raise RuntimeError("The Wineland archive contains an unsupported file type.")
+            if parts in path_kinds and not (
+                kind == path_kinds[parts] == "directory"
+            ):
+                raise RuntimeError("The Wineland archive contains duplicate paths.")
+            path_kinds[parts] = kind
+            link_parts = None
+            if member.issym():
+                link_parts = normalize_link(parts[:-1], member.linkname)
+            elif member.islnk():
+                link_parts = normalize_link((), member.linkname)
+            entries.append((member, parts, kind, link_parts))
+
+        for parts in path_kinds:
+            for length in range(1, len(parts)):
+                ancestor = parts[:length]
+                if ancestor in path_kinds and path_kinds[ancestor] != "directory":
+                    raise RuntimeError("The Wineland archive contains a path collision.")
+
+        directory_modes = []
+        for member, parts, kind, _link_parts in entries:
+            if kind != "directory":
+                continue
+            target = root.joinpath(*parts)
+            target.mkdir(parents=True, exist_ok=True)
+            directory_modes.append((target, member.mode & 0o777))
+
+        regular_files = [entry for entry in entries if entry[2] == "file"]
+        total_size = sum(member.size for member, _parts, _kind, _link in regular_files)
+        if shutil.disk_usage(root).free < total_size + 64 * 1024 * 1024:
+            raise RuntimeError("There is not enough free space to extract Proton Wineland.")
+
+        for member, parts, kind, _link_parts in regular_files:
+            target = root.joinpath(*parts)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            source = archive.extractfile(member)
+            if source is None:
+                raise RuntimeError("The Wineland archive contains an unreadable file.")
+            with source, target.open("wb") as output:
+                shutil.copyfileobj(source, output)
+            target.chmod(member.mode & 0o777)
+
+        hardlinks = [entry for entry in entries if entry[2] == "hardlink"]
+        while hardlinks:
+            remaining = []
+            created = False
+            for member, parts, _kind, link_parts in hardlinks:
+                target = root.joinpath(*parts)
+                source = root.joinpath(*(link_parts or ()))
+                if not source.is_file() or source.is_symlink():
+                    remaining.append((member, parts, "hardlink", link_parts))
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                os.link(source, target)
+                created = True
+            if remaining and not created:
+                raise RuntimeError("The Wineland archive contains an invalid hard link.")
+            hardlinks = remaining
+
+        for _member, parts, _kind, link_parts in entries:
+            if _kind != "symlink":
+                continue
+            target = root.joinpath(*parts)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.symlink(_member.linkname, target)
+
+        for directory, mode in reversed(directory_modes):
+            directory.chmod(mode)
+
+
+def install_proton_wineland(
+    compatibility_dir: Path,
+    variant: str,
+    progress: Callable[[str], None] | None = None,
+    machine: str | None = None,
+) -> str | None:
+    if variant not in WINELAND_INSTALLS:
+        raise RuntimeError(f"Unsupported Proton Wineland variant: {variant}")
+    if (machine or platform.machine()).lower() not in {"x86_64", "amd64"}:
+        raise RuntimeError("Proton Wineland releases are currently available for x86_64 only.")
+
+    display_name, directory_name = WINELAND_INSTALLS[variant]
+    compatibility_dir.mkdir(parents=True, exist_ok=True)
+    destination = compatibility_dir / directory_name
+
+    report = progress or (lambda _message: None)
+    report("Checking the latest Proton Wineland release...")
+    request = urllib.request.Request(
+        WINELAND_RELEASE_API,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "Proton Selector",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        release = json.load(response)
+
+    tag = release.get("tag_name", "")
+    if not re.fullmatch(r"wineland-[A-Za-z0-9.-]+", tag):
+        raise RuntimeError("GitHub returned an invalid Proton Wineland release tag.")
+    suffix = {"normal": "", "v3": "_v3", "wow64": "_wow64"}[variant]
+    asset_name = f"proton-{tag}-x86_64{suffix}.tar.xz"
+    asset = next(
+        (entry for entry in release.get("assets", []) if entry.get("name") == asset_name),
+        None,
+    )
+    if asset is None:
+        raise RuntimeError(f"The latest release does not include {asset_name}.")
+    if os.path.lexists(destination):
+        marker_path = destination / WINELAND_MANAGED_MARKER
+        if destination.is_symlink() or not destination.is_dir() or marker_path.is_symlink():
+            raise RuntimeError(f"Refusing to replace unmanaged path: {destination}")
+        try:
+            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            marker = {}
+        if marker.get("variant") == variant and marker.get("tag") == tag:
+            report(f"Proton Wineland {variant} {tag} is already installed.")
+            return None
+        if marker and marker.get("variant") != variant:
+            raise RuntimeError(f"Refusing to replace a different Wineland install: {destination}")
+        if not marker:
+            if any(
+                tool.path.name == asset_name.removesuffix(".tar.xz")
+                and tool.display_name == asset_name.removesuffix(".tar.xz")
+                for tool in scan_custom_tools([compatibility_dir])
+            ):
+                report(f"Proton Wineland {variant} {tag} is already installed.")
+                return None
+            raise RuntimeError(f"Refusing to replace unmanaged path: {destination}")
+
+    archive_stem = asset_name.removesuffix(".tar.xz")
+    if any(
+        tool.path.name == archive_stem and tool.display_name == archive_stem
+        for tool in scan_custom_tools([compatibility_dir])
+    ):
+        report(f"Proton Wineland {variant} {tag} is already installed.")
+        return None
+
+    asset_url = asset.get("browser_download_url", "")
+    parsed_url = urllib.parse.urlparse(asset_url)
+    if (
+        parsed_url.scheme != "https"
+        or parsed_url.hostname != "github.com"
+        or not parsed_url.path.startswith(
+            f"/nanomatters/proton-cachyos/releases/download/{tag}/"
+        )
+    ):
+        raise RuntimeError("GitHub returned an invalid Proton Wineland download URL.")
+    digest_text = asset.get("digest", "")
+    digest_match = re.fullmatch(r"sha256:([0-9a-f]{64})", digest_text)
+    if digest_match is None:
+        raise RuntimeError("GitHub did not provide a valid SHA-256 digest for the archive.")
+    expected_digest = digest_match.group(1)
+    expected_size = int(asset.get("size", 0))
+    if expected_size <= 0:
+        raise RuntimeError("GitHub returned an invalid Proton Wineland archive size.")
+
+    staged = compatibility_dir / f".{directory_name}.new-{os.getpid()}"
+    _remove_managed_path(staged)
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix=".proton-wineland-download-",
+            dir=compatibility_dir,
+        ) as temporary_directory:
+            temporary = Path(temporary_directory)
+            archive_path = temporary / asset_name
+            report(f"Downloading {asset_name} (0%)")
+            digest = hashlib.sha256()
+            downloaded = 0
+            last_percent = -1
+            download_request = urllib.request.Request(
+                asset_url,
+                headers={"User-Agent": "Proton Selector"},
+            )
+            with urllib.request.urlopen(download_request, timeout=60) as response:
+                with archive_path.open("wb") as archive_file:
+                    while True:
+                        chunk = response.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        downloaded += len(chunk)
+                        if downloaded > expected_size:
+                            raise RuntimeError("The downloaded Wineland archive is larger than expected.")
+                        archive_file.write(chunk)
+                        digest.update(chunk)
+                        percent = downloaded * 100 // expected_size
+                        if percent != last_percent:
+                            report(f"Downloading {asset_name} ({percent}%)")
+                            last_percent = percent
+            if downloaded != expected_size:
+                raise RuntimeError("The downloaded Wineland archive is incomplete.")
+            if digest.hexdigest() != expected_digest:
+                raise RuntimeError("The Proton Wineland archive failed SHA-256 verification.")
+
+            report("Extracting Proton Wineland...")
+            extraction_root = temporary / "extracted"
+            _safe_extract_tar(archive_path, extraction_root)
+            tool_roots = [
+                manifest.parent
+                for manifest in extraction_root.rglob("compatibilitytool.vdf")
+                if (manifest.parent / "proton").is_file()
+                and (manifest.parent / "toolmanifest.vdf").is_file()
+            ]
+            if len(tool_roots) != 1:
+                raise RuntimeError("The Wineland archive has an unexpected tool layout.")
+            tool_root = tool_roots[0]
+            launcher = tool_root / "proton"
+            if not os.access(launcher, os.X_OK):
+                raise RuntimeError("The downloaded Proton Wineland launcher is not executable.")
+            os.replace(tool_root, staged)
+            _atomic_write(
+                staged / WINELAND_MANAGED_MARKER,
+                json.dumps(
+                    {
+                        "variant": variant,
+                        "tag": tag,
+                        "asset": asset_name,
+                        "sha256": expected_digest,
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+            )
+        report(f"Installing {display_name} {tag}...")
+        _replace_managed_path(staged, destination)
+    finally:
+        _remove_managed_path(staged)
+
+    return tag
+
+
 def choose_compatibility_directory(
     home: Path | None = None,
     env: Mapping[str, str] | None = None,
@@ -684,23 +1017,49 @@ class SelectorManager:
         self.proton_environment_path = self.tool_path / "proton-environment"
         self.legacy_adapter_path = data_home(self.home, self.env) / "tool"
 
-    def proton_environment_options(self) -> set[str]:
+    def proton_environment_variables(self) -> dict[str, str]:
         try:
-            configured = self.proton_environment_path.read_text(
+            entries = self.proton_environment_path.read_text(
                 encoding="utf-8"
             ).splitlines()
         except OSError:
-            return set()
-        return set(configured).intersection(PROTON_ENVIRONMENT_OPTIONS)
+            return {}
+        variables = {}
+        for entry in entries:
+            if "=" in entry:
+                name, value = entry.split("=", 1)
+            else:
+                name, value = entry, "1"
+            if PROTON_ENVIRONMENT_VARIABLE_PATTERN.fullmatch(name):
+                variables[name] = value
+        return variables
 
-    def save_proton_environment(self, options: Iterable[str]) -> None:
-        enabled = set(options).intersection(PROTON_ENVIRONMENT_OPTIONS)
+    def proton_environment_options(self) -> set[str]:
+        return set(self.proton_environment_variables())
+
+    def save_proton_environment(
+        self,
+        variables: Mapping[str, str] | Iterable[str],
+    ) -> None:
+        entries = (
+            variables.items()
+            if isinstance(variables, Mapping)
+            else ((name, "1") for name in variables)
+        )
+        configured = {}
+        for name, value in entries:
+            value = str(value)
+            if (
+                PROTON_ENVIRONMENT_VARIABLE_PATTERN.fullmatch(name)
+                and "\n" not in value
+                and "\r" not in value
+            ):
+                configured[name] = value
         _atomic_write(
             self.proton_environment_path,
             "".join(
-                f"{option}\n"
-                for option in PROTON_ENVIRONMENT_OPTIONS
-                if option in enabled
+                f"{name}={configured[name]}\n"
+                for name in sorted(configured)
             ),
         )
 
@@ -959,7 +1318,7 @@ class SelectorManager:
         game_id: str = "",
         game_tool: ProtonTool | None = None,
         progress: Callable[[str], None] | None = None,
-        proton_environment: Iterable[str] | None = None,
+        proton_environment: Mapping[str, str] | Iterable[str] | None = None,
     ) -> ActivationResult:
         progress = progress or (lambda _message: None)
         selected_path = self._validate_source(

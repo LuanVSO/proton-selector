@@ -20,6 +20,9 @@ install -m 644 \
     "$project_dir/proton_selector_games.qml" \
     "$bin_dir/proton_selector_games.qml"
 install -m 644 \
+    "$project_dir/proton_selector_environment.qml" \
+    "$bin_dir/proton_selector_environment.qml"
+install -m 644 \
     "$project_dir/proton-selector.desktop" \
     "$applications_dir/proton-selector.desktop"
 
@@ -29,4 +32,5 @@ printf '  %s\n' "$bin_dir/proton_selector_i18n.py"
 printf '  %s\n' "$bin_dir/proton_selector_qt.py"
 printf '  %s\n' "$bin_dir/proton_selector.qml"
 printf '  %s\n' "$bin_dir/proton_selector_games.qml"
+printf '  %s\n' "$bin_dir/proton_selector_environment.qml"
 printf '  %s\n' "$applications_dir/proton-selector.desktop"

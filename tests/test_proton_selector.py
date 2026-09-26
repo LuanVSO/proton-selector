@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import io
 import json
 import os
 import stat
@@ -8,8 +10,10 @@ import string
 import subprocess
 import sys
 import tempfile
+import tarfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import proton_selector
 import proton_selector_i18n
@@ -139,6 +143,170 @@ class ProtonSelectorTests(unittest.TestCase):
             [("12345", "Sample Game")],
         )
 
+    def test_detects_installed_wineland_variants(self) -> None:
+        names = {
+            "normal": "proton-wineland-11.0-20260922-x86_64",
+            "v3": "proton-wineland-11.0-20260922-x86_64_v3",
+            "wow64": "proton-wineland-11.0-20260922-x86_64_wow64",
+        }
+        for name in names.values():
+            create_custom_tool(self.compat, name, name)
+
+        self.assertEqual(
+            proton_selector.installed_proton_wineland_variants(self.compat),
+            set(names),
+        )
+        tools = proton_selector.scan_custom_tools([self.compat])
+        for variant, name in names.items():
+            tool = next(tool for tool in tools if tool.path.name == name)
+            self.assertEqual(proton_selector.proton_wineland_variant(tool), variant)
+
+    def test_detects_all_proton_environment_variables_per_version(self) -> None:
+        write_executable(
+            self.ge_one / "proton",
+            '#!/bin/sh\n[ "${PROTON_NO_FSYNC-}" ]\n'
+            '[ "${PROTON_LOG_DIR-}" ]\n[ "${PROTON_CUSTOM_VALUE-}" ]\n',
+        )
+        write_executable(
+            self.ge_two / "proton",
+            '#!/bin/sh\n[ "${PROTON_USE_WINED3D-}" ]\n'
+            '[ "${PROTON_FORCE_NVAPI-}" ]\n',
+        )
+
+        self.assertEqual(
+            set(proton_selector.proton_environment_variables(self.ge_one)),
+            {"PROTON_NO_FSYNC", "PROTON_LOG_DIR", "PROTON_CUSTOM_VALUE"},
+        )
+        self.assertEqual(
+            set(proton_selector.proton_environment_variables(self.ge_two)),
+            {"PROTON_USE_WINED3D", "PROTON_FORCE_NVAPI"},
+        )
+
+    def test_installs_verified_proton_wineland_variant(self) -> None:
+        archive_buffer = io.BytesIO()
+        with tarfile.open(fileobj=archive_buffer, mode="w:xz") as archive:
+            files = {
+                "compatibilitytool.vdf": (
+                    '"compatibilitytools" { "compat_tools" { '
+                    '"Test Wineland" { "install_path" "." '
+                    '"display_name" "Test Wineland" } } }\n'
+                ),
+                "toolmanifest.vdf": TOOL_MANIFEST,
+                "version": "Test Wineland\n",
+                "proton": "#!/bin/sh\nexit 0\n",
+            }
+            for name, content in files.items():
+                member = tarfile.TarInfo(f"proton-wineland-test/{name}")
+                data = content.encode("utf-8")
+                member.size = len(data)
+                member.mode = 0o755 if name == "proton" else 0o644
+                archive.addfile(member, io.BytesIO(data))
+        archive_data = archive_buffer.getvalue()
+        tag = "wineland-test-release"
+        asset_name = f"proton-{tag}-x86_64_v3.tar.xz"
+        release_data = json.dumps(
+            {
+                "tag_name": tag,
+                "assets": [
+                    {
+                        "name": asset_name,
+                        "browser_download_url": (
+                            "https://github.com/nanomatters/proton-cachyos/"
+                            f"releases/download/{tag}/{asset_name}"
+                        ),
+                        "digest": f"sha256:{hashlib.sha256(archive_data).hexdigest()}",
+                        "size": len(archive_data),
+                    }
+                ],
+            }
+        ).encode("utf-8")
+
+        with patch.object(
+            proton_selector.urllib.request,
+            "urlopen",
+            side_effect=[io.BytesIO(release_data), io.BytesIO(archive_data)],
+        ):
+            installed_tag = proton_selector.install_proton_wineland(
+                self.compat,
+                "v3",
+                machine="x86_64",
+            )
+
+        self.assertEqual(installed_tag, tag)
+        installed_path = self.compat / "Proton Wineland v3"
+        self.assertTrue((installed_path / "proton").is_file())
+        self.assertTrue((installed_path / proton_selector.WINELAND_MANAGED_MARKER).is_file())
+        self.assertEqual(
+            proton_selector.installed_proton_wineland_variants(self.compat),
+            {"v3"},
+        )
+        installed_tools = proton_selector.scan_proton_tools(self.home, self.env)
+        self.assertTrue(any(tool.display_name == "Test Wineland" for tool in installed_tools))
+
+        with patch.object(
+            proton_selector.urllib.request,
+            "urlopen",
+            return_value=io.BytesIO(release_data),
+        ) as urlopen:
+            no_op_result = proton_selector.install_proton_wineland(
+                self.compat,
+                "v3",
+                machine="x86_64",
+            )
+        self.assertIsNone(no_op_result)
+        self.assertEqual(urlopen.call_count, 1)
+
+    def test_skips_download_when_matching_wineland_is_already_installed(self) -> None:
+        tag = "wineland-test-release"
+        archive_stem = f"proton-{tag}-x86_64_wow64"
+        create_custom_tool(self.compat, archive_stem, archive_stem)
+        asset_name = f"{archive_stem}.tar.xz"
+        release_data = json.dumps(
+            {
+                "tag_name": tag,
+                "assets": [
+                    {
+                        "name": asset_name,
+                        "browser_download_url": (
+                            "https://github.com/nanomatters/proton-cachyos/"
+                            f"releases/download/{tag}/{asset_name}"
+                        ),
+                    }
+                ],
+            }
+        ).encode("utf-8")
+
+        with patch.object(
+            proton_selector.urllib.request,
+            "urlopen",
+            return_value=io.BytesIO(release_data),
+        ) as urlopen:
+            result = proton_selector.install_proton_wineland(
+                self.compat,
+                "wow64",
+                machine="x86_64",
+            )
+
+        self.assertIsNone(result)
+        self.assertEqual(urlopen.call_count, 1)
+
+    def test_rejects_unsafe_wineland_archive_path(self) -> None:
+        archive_buffer = io.BytesIO()
+        with tarfile.open(fileobj=archive_buffer, mode="w:xz") as archive:
+            member = tarfile.TarInfo("../outside")
+            member.size = 1
+            archive.addfile(member, io.BytesIO(b"x"))
+        archive_buffer.seek(0)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            archive_path = Path(temporary) / "unsafe.tar.xz"
+            archive_path.write_bytes(archive_buffer.getvalue())
+            with self.assertRaisesRegex(RuntimeError, "unsafe path"):
+                proton_selector._safe_extract_tar(
+                    archive_path,
+                    Path(temporary) / "extracted",
+                )
+
     def test_activation_creates_permanent_directory_and_updates_copies(self) -> None:
         tools = proton_selector.scan_proton_tools(self.home, self.env)
         manager = proton_selector.SelectorManager(
@@ -217,11 +385,11 @@ class ProtonSelectorTests(unittest.TestCase):
         self.assertEqual(completed.stdout, "fallback\n")
         self.assertIn("using fallback", completed.stderr)
 
-    def test_launcher_exports_selected_proton_environment_options(self) -> None:
+    def test_launcher_exports_proton_environment_values(self) -> None:
         write_executable(
             self.ge_one / "proton",
             "#!/bin/sh\nprintf '%s|%s|%s\\n' "
-            '"${PROTON_NO_ESYNC-}" "${PROTON_LOG-}" "${PROTON_NO_FSYNC-}"\n',
+            '"${PROTON_NO_ESYNC-}" "${PROTON_LOG-}" "${PROTON_LOG_DIR-}"\n',
         )
         tools = proton_selector.scan_proton_tools(self.home, self.env)
         manager = proton_selector.SelectorManager(self.home, self.env)
@@ -232,7 +400,12 @@ class ProtonSelectorTests(unittest.TestCase):
             selected,
             base,
             base,
-            proton_environment=("PROTON_NO_ESYNC", "PROTON_LOG", "UNKNOWN_OPTION"),
+            proton_environment={
+                "PROTON_NO_ESYNC": "0",
+                "PROTON_LOG": "WINEDEBUG=+all",
+                "PROTON_LOG_DIR": "/tmp/proton logs",
+                "UNKNOWN_OPTION": "ignored",
+            },
         )
         completed = subprocess.run(
             [manager.tool_path / "proton", "run"],
@@ -241,10 +414,34 @@ class ProtonSelectorTests(unittest.TestCase):
             text=True,
         )
 
-        self.assertEqual(completed.stdout, "1|1|\n")
+        self.assertEqual(
+            completed.stdout,
+            "0|WINEDEBUG=+all|/tmp/proton logs\n",
+        )
+        self.assertEqual(
+            manager.proton_environment_variables(),
+            {
+                "PROTON_NO_ESYNC": "0",
+                "PROTON_LOG": "WINEDEBUG=+all",
+                "PROTON_LOG_DIR": "/tmp/proton logs",
+            },
+        )
         self.assertEqual(
             manager.proton_environment_options(),
-            {"PROTON_NO_ESYNC", "PROTON_LOG"},
+            {"PROTON_NO_ESYNC", "PROTON_LOG", "PROTON_LOG_DIR"},
+        )
+
+    def test_reads_legacy_environment_names_as_value_one(self) -> None:
+        manager = proton_selector.SelectorManager(self.home, self.env)
+        manager.tool_path.mkdir(parents=True)
+        manager.proton_environment_path.write_text(
+            "PROTON_NO_FSYNC\nPROTON_LOG\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual(
+            manager.proton_environment_variables(),
+            {"PROTON_NO_FSYNC": "1", "PROTON_LOG": "1"},
         )
 
     def test_matching_version_file_skips_existing_managed_copy(self) -> None:

@@ -21,12 +21,14 @@ class SelectorController(QObject):
     progressChanged = Signal()
     _copyProgress = Signal(str)
     _copyFinished = Signal(object, object, object, object, object)
+    _winelandUpdateFinished = Signal(object, object, object)
 
     def __init__(self, backend: ModuleType) -> None:
         super().__init__()
         self.backend = backend
         self.manager = backend.SelectorManager()
         self._game_window: Any | None = None
+        self._environment_window: Any | None = None
         self.tools: list[Any] = []
         self._installed_games: list[Any] = []
         self.base_tool: Any | None = None
@@ -36,13 +38,17 @@ class SelectorController(QObject):
         self._game_id = ""
         self._game_id_error = ""
         self._copying = False
+        self._wineland_updating = False
+        self._wineland_variant = "normal"
+        self._wineland_variant_user_selected = False
         self._pending_game_versions: dict[str, int] = {}
         self._progress_text = ""
         self._notification_title = ""
         self._notification_body = ""
         self._notification_is_error = False
         self._notification_visible = False
-        self._proton_environment_options = self.manager.proton_environment_options()
+        self._proton_environment_values = self.manager.proton_environment_variables()
+        self._available_proton_environment_variables: tuple[str, ...] = ()
         language_override = os.environ.get("PROTON_SELECTOR_LANGUAGE", "")
         if language_override:
             self.language_preference = backend._.language
@@ -54,6 +60,7 @@ class SelectorController(QObject):
                 backend._.set_language(self.language_preference)
         self._copyProgress.connect(self._set_copy_progress)
         self._copyFinished.connect(self._activation_finished)
+        self._winelandUpdateFinished.connect(self._wineland_update_finished)
         self.refresh()
 
     @Property("QVariantList", notify=stateChanged)
@@ -66,6 +73,22 @@ class SelectorController(QObject):
                 label = f"{label} — {tool.path}"
             options.append({"label": label})
         return options
+
+    @Property("QVariantList", notify=stateChanged)
+    def winelandVariants(self) -> list[dict[str, str]]:
+        return [
+            {"value": "normal", "label": "Normal"},
+            {"value": "v3", "label": "_v3"},
+            {"value": "wow64", "label": "_wow64"},
+        ]
+
+    @Property(int, notify=stateChanged)
+    def winelandVariantIndex(self) -> int:
+        return {"normal": 0, "v3": 1, "wow64": 2}[self._wineland_variant]
+
+    @Property(bool, notify=stateChanged)
+    def winelandUpdating(self) -> bool:
+        return self._wineland_updating
 
     @Property("QVariantList", notify=stateChanged)
     def gameVersionOptions(self) -> list[dict[str, str]]:
@@ -103,23 +126,19 @@ class SelectorController(QObject):
         return dict(self.backend._.catalog)
 
     @Property("QVariantList", notify=stateChanged)
-    def protonEnvironmentOptions(self) -> list[dict[str, Any]]:
-        descriptions = {
-            "PROTON_NO_ESYNC": "Disable Esync",
-            "PROTON_NO_FSYNC": "Disable Fsync",
-            "PROTON_USE_WINED3D": "Use OpenGL instead of Vulkan",
-            "PROTON_LOG": "Write Proton log files",
-            "PROTON_HIDE_NVIDIA_GPU": "Hide NVIDIA GPU from the game",
-            "PROTON_ENABLE_NVAPI": "Enable NVIDIA NVAPI support",
-        }
+    def protonEnvironmentVariables(self) -> list[dict[str, str]]:
         return [
             {
-                "name": option,
-                "description": descriptions[option],
-                "enabled": option in self._proton_environment_options,
+                "name": name,
+                "value": self._proton_environment_values.get(name, ""),
             }
-            for option in self.backend.PROTON_ENVIRONMENT_OPTIONS
+            for name in self._available_proton_environment_variables
         ]
+
+    @Property(str, notify=stateChanged)
+    def activeVersionName(self) -> str:
+        tool = self._tool_at(self._active_index)
+        return tool.display_name if tool else "—"
 
     @Property("QVariantList", notify=stateChanged)
     def languageOptions(self) -> list[str]:
@@ -162,12 +181,12 @@ class SelectorController(QObject):
 
     @Property(bool, notify=stateChanged)
     def gameVersionEnabled(self) -> bool:
-        return bool(self._game_id) and self.gameIdValid and not self._copying
+        return bool(self._game_id) and self.gameIdValid and not self.copying
 
     @Property(bool, notify=stateChanged)
     def canActivate(self) -> bool:
         return (
-            not self._copying
+            not self.copying
             and self._tool_at(self._active_index) is not None
             and self._tool_at(self._fallback_index) is not None
             and self.base_tool is not None
@@ -200,7 +219,7 @@ class SelectorController(QObject):
 
     @Property(bool, notify=stateChanged)
     def copying(self) -> bool:
-        return self._copying
+        return self._copying or self._wineland_updating
 
     @Property(str, notify=progressChanged)
     def progressText(self) -> str:
@@ -240,11 +259,16 @@ class SelectorController(QObject):
 
     @Slot(int)
     def setActiveIndex(self, index: int) -> None:
+        if self.copying:
+            return
         self._active_index = index if self._tool_at(index) else -1
+        self._update_proton_environment_variables()
         self.stateChanged.emit()
 
     @Slot(int)
     def setFallbackIndex(self, index: int) -> None:
+        if self.copying:
+            return
         self._fallback_index = index if self._tool_at(index) else -1
         self.stateChanged.emit()
 
@@ -255,7 +279,7 @@ class SelectorController(QObject):
 
     @Slot(str, int)
     def setInstalledGameVersion(self, game_id: str, version_index: int) -> None:
-        if self._copying:
+        if self.copying:
             return
         try:
             normalized_game_id = self.backend.normalize_game_id(game_id)
@@ -308,20 +332,22 @@ class SelectorController(QObject):
         self.stateChanged.emit()
 
     @Slot(str, bool)
-    def setProtonEnvironmentOption(self, option: str, enabled: bool) -> None:
-        if option not in self.backend.PROTON_ENVIRONMENT_OPTIONS:
+    def setProtonEnvironmentVariable(self, name: str, value: str) -> None:
+        if self.copying:
             return
-        if enabled:
-            self._proton_environment_options.add(option)
+        if name not in self._available_proton_environment_variables:
+            return
+        if value:
+            self._proton_environment_values[name] = value
         else:
-            self._proton_environment_options.discard(option)
+            self._proton_environment_values.pop(name, None)
         if self.manager.tool_path.is_dir() and not self.manager.tool_path.is_symlink():
-            self.manager.save_proton_environment(self._proton_environment_options)
+            self.manager.save_proton_environment(self._proton_environment_values)
         self.stateChanged.emit()
 
     @Slot()
     def refresh(self) -> None:
-        if self._copying:
+        if self.copying:
             return
         previous_paths = [
             self._path_at(self._active_index),
@@ -367,6 +393,8 @@ class SelectorController(QObject):
         self._game_index = self._preferred_index(game_path)
         if self._game_index < 0:
             self._game_index = self._active_index
+        self._sync_wineland_variant()
+        self._update_proton_environment_variables()
         self.stateChanged.emit()
 
     @Slot()
@@ -401,7 +429,7 @@ class SelectorController(QObject):
         game_id: str,
         game_tool: Any | None,
     ) -> None:
-        if self._copying or self.base_tool is None:
+        if self.copying or self.base_tool is None:
             return
         self._copying = True
         self._notification_visible = False
@@ -416,7 +444,7 @@ class SelectorController(QObject):
                 self.base_tool,
                 game_id,
                 game_tool,
-                tuple(self._proton_environment_options),
+                dict(self._proton_environment_values),
             ),
             daemon=True,
         ).start()
@@ -436,12 +464,110 @@ class SelectorController(QObject):
         self._game_window.show()
         self._game_window.requestActivate()
 
+    def setEnvironmentWindow(self, environment_window: Any) -> None:
+        self._environment_window = environment_window
+
+    @Slot()
+    def openEnvironmentWindow(self) -> None:
+        if self._environment_window is None:
+            return
+        self._environment_window.show()
+        self._environment_window.requestActivate()
+
+    @Slot(int)
+    def setWinelandVariantIndex(self, index: int) -> None:
+        variants = ("normal", "v3", "wow64")
+        if self.copying or index < 0 or index >= len(variants):
+            return
+        self._wineland_variant = variants[index]
+        self._wineland_variant_user_selected = True
+        self.stateChanged.emit()
+
+    @Slot()
+    def updateWineland(self) -> None:
+        if self.copying:
+            return
+        self._wineland_updating = True
+        self._notification_visible = False
+        self._progress_text = "Checking the latest Proton Wineland release..."
+        self.stateChanged.emit()
+        self.progressChanged.emit()
+        threading.Thread(
+            target=self._wineland_update_worker,
+            args=(self._wineland_variant,),
+            daemon=True,
+        ).start()
+
+    def _wineland_update_worker(self, variant: str) -> None:
+        tag = None
+        error = None
+        try:
+            tag = self.backend.install_proton_wineland(
+                self.manager.compatibility_dir,
+                variant,
+                progress=self._copyProgress.emit,
+            )
+        except Exception as caught:
+            error = caught
+        self._winelandUpdateFinished.emit(variant, tag, error)
+
+    @Slot(object, object, object)
+    def _wineland_update_finished(
+        self,
+        variant: str,
+        tag: str | None,
+        error: Exception | None,
+    ) -> None:
+        self._wineland_updating = False
+        self._progress_text = ""
+        self.refresh()
+        self.progressChanged.emit()
+        if error is not None:
+            self._notify(str(error), error=True)
+            return
+        if tag is None:
+            self._notify(f"Proton Wineland {variant} is already up to date.")
+            return
+        self._notify(f"Proton Wineland {variant} was updated to {tag}.")
+
     @Slot(str, "QVariant", result=str)
     def translate(self, message_id: str, values: dict[str, Any] | None = None) -> str:
         return self.backend._(message_id, **dict(values or {}))
 
     def _tool_at(self, index: int) -> Any | None:
         return self.tools[index] if 0 <= index < len(self.tools) else None
+
+    def _update_proton_environment_variables(self) -> None:
+        tool = self._tool_at(self._active_index)
+        self._available_proton_environment_variables = (
+            self.backend.proton_environment_variables(tool.path)
+            if tool
+            else ()
+        )
+
+    def _sync_wineland_variant(self) -> None:
+        if self._wineland_variant_user_selected:
+            return
+        installed = self.backend.installed_proton_wineland_variants(
+            self.manager.compatibility_dir
+        )
+        active_tool = self._tool_at(self._active_index)
+        active_variant = (
+            self.backend.proton_wineland_variant(active_tool)
+            if active_tool
+            else None
+        )
+        if active_variant in installed:
+            self._wineland_variant = active_variant
+            return
+        self._wineland_variant = next(
+            (
+                variant
+                for variant in ("normal", "v3", "wow64")
+                if variant in installed
+            ),
+            "normal",
+        )
 
     def _path_at(self, index: int) -> str:
         tool = self._tool_at(index)
@@ -518,7 +644,7 @@ class SelectorController(QObject):
         base_tool: Any,
         game_id: str,
         game_tool: Any | None,
-        proton_environment: tuple[str, ...],
+        proton_environment: dict[str, str],
     ) -> None:
         result = None
         error = None
@@ -602,6 +728,14 @@ def run_application(backend: ModuleType) -> int:
     if len(root_objects) < 2:
         return 1
     controller.setGameWindow(root_objects[-1])
+    environment_qml_file = Path(__file__).with_name(
+        "proton_selector_environment.qml"
+    )
+    engine.load(QUrl.fromLocalFile(str(environment_qml_file)))
+    root_objects = engine.rootObjects()
+    if len(root_objects) < 3:
+        return 1
+    controller.setEnvironmentWindow(root_objects[-1])
     exit_code = application.exec()
     del engine
     del controller

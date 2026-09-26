@@ -111,8 +111,9 @@ The installer copies:
   `~/.local/bin/proton_selector_i18n.py`
 - The Qt controller and Kirigami interface to
    `~/.local/bin/proton_selector_qt.py`,
-   `~/.local/bin/proton_selector.qml`, and
-   `~/.local/bin/proton_selector_games.qml`
+   `~/.local/bin/proton_selector.qml`,
+   `~/.local/bin/proton_selector_games.qml`, and
+   `~/.local/bin/proton_selector_environment.qml`
 - The desktop entry to
   `${XDG_DATA_HOME:-~/.local/share}/applications/proton-selector.desktop`
 
@@ -169,13 +170,22 @@ Games using Proton Selector without a per-game mapping use the Active Version.
 If its managed files are unavailable, Proton Selector uses the Fallback
 Version. No Steam restart is needed when either selection changes.
 
+### Proton Wineland updater
+
+Choose **Normal**, **_v3**, or **_wow64** and click **Update** to install the
+latest matching Proton Wineland release from
+[nanomatters/proton-cachyos](https://github.com/nanomatters/proton-cachyos/releases).
+The download is checked against GitHub's SHA-256 digest before installation.
+After updating, select the installed Proton Wineland entry as the Active
+Version and apply it with **Use Selected Version**.
+
 ### Proton environment options
 
-Use the switches on the main screen to enable common Proton variables for all
-games launched through Proton Selector. Available options disable Esync or
-Fsync, force the OpenGL renderer, enable Proton log files, hide NVIDIA GPUs,
-or enable NVAPI. These settings are saved with the managed tool and applied on
-each launch.
+Choose **Proton Environment...** on the main screen to configure Proton
+variables detected from the selected Active Version's launcher. The list
+includes every `PROTON_*` name found there, and each value is free-form rather
+than assumed to be boolean. Leave a value empty to keep that variable unset.
+Settings are saved with the managed tool and applied on each launch.
 
 ### Selecting a version for one game
 

@@ -14,15 +14,37 @@ Kirigami.ApplicationWindow {
     visible: false
     title: "Proton Selector - Game Versions"
 
+    Shortcut {
+        sequence: "Ctrl+F"
+        onActivated: {
+            gameSearchField.forceActiveFocus()
+            gameSearchField.selectAll()
+        }
+    }
+
     pageStack.initialPage: Kirigami.ScrollablePage {
         id: gamePage
         property var selector: gameWindow.appController
+        property var filteredGames: {
+            var query = gameSearchField.text.trim().toLocaleLowerCase()
+            return gamePage.selector.installedGames.filter(function(game) {
+                var searchableText = game.name + " " + game.gameId
+                return searchableText.toLocaleLowerCase().includes(query)
+            })
+        }
 
         title: "Installed Steam Games"
 
         ColumnLayout {
             width: parent.width
             spacing: Kirigami.Units.largeSpacing
+
+            Controls.TextField {
+                id: gameSearchField
+                Layout.fillWidth: true
+                placeholderText: "Search games by name or ID"
+                Accessible.name: placeholderText
+            }
 
             Controls.Label {
                 Layout.fillWidth: true
@@ -31,8 +53,16 @@ Kirigami.ApplicationWindow {
                 wrapMode: Text.WordWrap
             }
 
+            Controls.Label {
+                Layout.fillWidth: true
+                visible: gamePage.selector.installedGames.length > 0
+                    && gamePage.filteredGames.length === 0
+                text: "No games match your search."
+                wrapMode: Text.WordWrap
+            }
+
             Repeater {
-                model: gamePage.selector.installedGames
+                model: gamePage.filteredGames
 
                 delegate: RowLayout {
                     Layout.fillWidth: true
