@@ -120,6 +120,25 @@ class ProtonSelectorTests(unittest.TestCase):
         self.assertTrue(base.official)
         self.assertEqual(base.runtime_appid, "4183110")
 
+    def test_scans_installed_steam_games_without_proton_tools(self) -> None:
+        (self.steam / "steamapps/appmanifest_12345.acf").write_text(
+            '''"AppState"
+{
+  "appid" "12345"
+  "name" "Sample Game"
+  "installdir" "Sample Game"
+}
+''',
+            encoding="utf-8",
+        )
+
+        games = proton_selector.scan_installed_games(self.home, self.env)
+
+        self.assertEqual(
+            [(game.game_id, game.name) for game in games],
+            [("12345", "Sample Game")],
+        )
+
     def test_activation_creates_permanent_directory_and_updates_copies(self) -> None:
         tools = proton_selector.scan_proton_tools(self.home, self.env)
         manager = proton_selector.SelectorManager(
@@ -197,6 +216,36 @@ class ProtonSelectorTests(unittest.TestCase):
         )
         self.assertEqual(completed.stdout, "fallback\n")
         self.assertIn("using fallback", completed.stderr)
+
+    def test_launcher_exports_selected_proton_environment_options(self) -> None:
+        write_executable(
+            self.ge_one / "proton",
+            "#!/bin/sh\nprintf '%s|%s|%s\\n' "
+            '"${PROTON_NO_ESYNC-}" "${PROTON_LOG-}" "${PROTON_NO_FSYNC-}"\n',
+        )
+        tools = proton_selector.scan_proton_tools(self.home, self.env)
+        manager = proton_selector.SelectorManager(self.home, self.env)
+        base = manager.find_base(tools)
+        selected = next(tool for tool in tools if tool.display_name == "GE-Proton One")
+
+        manager.activate(
+            selected,
+            base,
+            base,
+            proton_environment=("PROTON_NO_ESYNC", "PROTON_LOG", "UNKNOWN_OPTION"),
+        )
+        completed = subprocess.run(
+            [manager.tool_path / "proton", "run"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(completed.stdout, "1|1|\n")
+        self.assertEqual(
+            manager.proton_environment_options(),
+            {"PROTON_NO_ESYNC", "PROTON_LOG"},
+        )
 
     def test_matching_version_file_skips_existing_managed_copy(self) -> None:
         tools = proton_selector.scan_proton_tools(self.home, self.env)
@@ -312,6 +361,12 @@ class ProtonSelectorTests(unittest.TestCase):
             env={**clean_env, "SteamGameId": "12345"},
         )
         self.assertEqual(changed_game.stdout, "active\n")
+        managed_directory = mappings["12345"].managed_directory
+        self.assertTrue(manager.clear_game_mapping("12345"))
+        self.assertNotIn("12345", manager.game_mappings())
+        self.assertIn("umu-example", manager.game_mappings())
+        self.assertFalse((manager.games_dir / managed_directory).exists())
+        self.assertFalse(manager.clear_game_mapping("12345"))
 
     def test_rejects_unsafe_game_id(self) -> None:
         tools = proton_selector.scan_proton_tools(self.home, self.env)

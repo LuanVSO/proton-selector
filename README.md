@@ -75,19 +75,23 @@ normal Active copy, and an unavailable Active copy uses Fallback.
 - Steam
 - Valve `Proton 11.0`, or `Proton 11.0 (ARM64)` on ARM64
 - Python 3
-- GTK 4 and PyGObject
+- Qt 6, PySide6, and KDE Kirigami 6
 
-Install the GTK Python bindings with:
+Install the Qt and Kirigami dependencies with:
 
 ```bash
 # Fedora
-sudo dnf install python3-gobject gtk4
+sudo dnf install python3-pyside6 kf6-kirigami
 
 # Ubuntu
-sudo apt install python3-gi gir1.2-gtk-4.0
+sudo apt install \
+   python3-pyside6.qtcore python3-pyside6.qtgui \
+   python3-pyside6.qtqml python3-pyside6.qtquick \
+   qml6-module-qtquick-controls qml6-module-qtquick-layouts \
+   qml6-module-org-kde-kirigami
 
 # Arch Linux
-sudo pacman -S python-gobject gtk4
+sudo pacman -S pyside6 kirigami
 ```
 
 ## Installation
@@ -105,6 +109,10 @@ The installer copies:
 - The application to `~/.local/bin/proton-selector`
 - The built-in translation catalog to
   `~/.local/bin/proton_selector_i18n.py`
+- The Qt controller and Kirigami interface to
+   `~/.local/bin/proton_selector_qt.py`,
+   `~/.local/bin/proton_selector.qml`, and
+   `~/.local/bin/proton_selector_games.qml`
 - The desktop entry to
   `${XDG_DATA_HOME:-~/.local/share}/applications/proton-selector.desktop`
 
@@ -141,7 +149,7 @@ installing it:
 2. Start Proton Selector.
 3. Select the default **Active Version**.
 4. Select the safety **Fallback Version**. This defaults to Valve Proton 11.0.
-5. Leave **GAME ID (Optional)** empty and click **Use Selected Version**.
+5. Click **Use Selected Version**.
 6. Wait for the in-app notification confirming that the managed copies are
    ready, then close the notification.
 7. Because this is the first setup, restart Steam once so Steam can discover
@@ -153,30 +161,33 @@ Steam does not need to be restarted after this initial registration.
 
 ### Changing the default versions
 
-1. Leave **GAME ID (Optional)** empty.
-2. Choose a new **Active Version** and, if desired, a new
+1. Choose a new **Active Version** and, if desired, a new
    **Fallback Version**.
-3. Click **Use Selected Version** and wait for the in-app confirmation.
+2. Click **Use Selected Version** and wait for the in-app confirmation.
 
 Games using Proton Selector without a per-game mapping use the Active Version.
 If its managed files are unavailable, Proton Selector uses the Fallback
 Version. No Steam restart is needed when either selection changes.
 
+### Proton environment options
+
+Use the switches on the main screen to enable common Proton variables for all
+games launched through Proton Selector. Available options disable Esync or
+Fsync, force the OpenGL renderer, enable Proton log files, hide NVIDIA GPUs,
+or enable NVAPI. These settings are saved with the managed tool and applied on
+each launch.
+
 ### Selecting a version for one game
 
-1. Enter the numeric Steam game ID or an UMU ID in
-   **GAME ID (Optional)**.
-2. Choose the desired **Game Version**. A new game ID initially selects the
-   current Active Version.
-3. Click **Use Selected Version** and wait for the in-app confirmation.
-4. In Steam, make sure that game uses **Proton Selector** as its compatibility
-   tool.
+Open **Game Versions...** to see installed Steam games, each with a Proton
+dropdown. Changing a dropdown saves that game's version immediately; choose
+**Use Active Version** to remove its per-game override. In Steam, make sure
+that game uses **Proton Selector** as its compatibility tool.
 
 When that game launches, its Game Version becomes the effective Active Version.
-The bottom of the application shows this effective version while its GAME ID
-is entered. Entering the same ID later loads its saved version; selecting
-another version updates the existing CSV mapping. Other games continue to use
-their own mappings or the default Active Version. No Steam restart is needed.
+Selecting another version updates the existing CSV mapping. Other games
+continue to use their own mappings or the default Active Version. No Steam
+restart is needed.
 
 Use **Refresh** if a Proton build is installed while Proton Selector is already
 open. A matching source and managed `version` file is detected as current, so
@@ -225,7 +236,8 @@ Supported override codes are `ar`, `cs`, `de`, `en`, `es`, `fr`, `it`, `ja`,
 
 ## Command-line usage
 
-Running `proton-selector` without options opens the GTK interface. Supplying a
+Running `proton-selector` without options opens the Kirigami interface.
+Supplying a
 CLI option performs the requested operation in the terminal without opening a
 window.
 
@@ -310,7 +322,7 @@ added to Steam and launched from Gaming Mode:
 4. Return to Gaming Mode and launch Proton Selector whenever you want to switch
    the target used by the permanent compatibility-tool entry.
 
-The GTK version dropdown and its action buttons are keyboard- and
+The version selectors and action buttons are keyboard- and
 controller-focusable for use in a gamescope session. Confirmations and errors
 appear inside the main window, so Proton Selector does not create a second
 window for Gamescope to manage.

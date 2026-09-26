@@ -11,10 +11,22 @@ install -m 644 \
     "$project_dir/proton_selector_i18n.py" \
     "$bin_dir/proton_selector_i18n.py"
 install -m 644 \
+    "$project_dir/proton_selector_qt.py" \
+    "$bin_dir/proton_selector_qt.py"
+install -m 644 \
+    "$project_dir/proton_selector.qml" \
+    "$bin_dir/proton_selector.qml"
+install -m 644 \
+    "$project_dir/proton_selector_games.qml" \
+    "$bin_dir/proton_selector_games.qml"
+install -m 644 \
     "$project_dir/proton-selector.desktop" \
     "$applications_dir/proton-selector.desktop"
 
 printf '%s\n' "Installed Proton Selector:"
 printf '  %s\n' "$bin_dir/proton-selector"
 printf '  %s\n' "$bin_dir/proton_selector_i18n.py"
+printf '  %s\n' "$bin_dir/proton_selector_qt.py"
+printf '  %s\n' "$bin_dir/proton_selector.qml"
+printf '  %s\n' "$bin_dir/proton_selector_games.qml"
 printf '  %s\n' "$applications_dir/proton-selector.desktop"

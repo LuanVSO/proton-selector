@@ -15,16 +15,9 @@ import platform
 import re
 import shutil
 import sys
-import threading
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Mapping
-
-import gi
-
-gi.require_version("Gtk", "4.0")
-from gi.repository import GLib, Gtk, Pango
 
 from proton_selector_i18n import (
     CATALOGS,
@@ -137,10 +130,29 @@ if [ "${STEAM_COMPAT_TOOL_PATH+x}" = x ]; then
     export STEAM_COMPAT_TOOL_PATH
 fi
 
+if [ -f "$selector_dir/proton-environment" ]; then
+    while IFS= read -r variable || [ -n "$variable" ]; do
+        case "$variable" in
+            PROTON_NO_ESYNC|PROTON_NO_FSYNC|PROTON_USE_WINED3D|PROTON_LOG|PROTON_HIDE_NVIDIA_GPU|PROTON_ENABLE_NVAPI)
+                export "$variable=1"
+                ;;
+        esac
+    done < "$selector_dir/proton-environment"
+fi
+
 PROTON_SELECTOR_TARGET="$selected"
 export PROTON_SELECTOR_TARGET
 exec "$selected/proton" "$@"
 '''
+
+PROTON_ENVIRONMENT_OPTIONS = (
+    "PROTON_NO_ESYNC",
+    "PROTON_NO_FSYNC",
+    "PROTON_USE_WINED3D",
+    "PROTON_LOG",
+    "PROTON_HIDE_NVIDIA_GPU",
+    "PROTON_ENABLE_NVAPI",
+)
 
 
 @dataclass(frozen=True)
@@ -169,6 +181,12 @@ class GameMapping:
     managed_directory: str
     proton_name: str
     source_path: str
+
+
+@dataclass(frozen=True)
+class InstalledGame:
+    game_id: str
+    name: str
 
 
 def normalize_game_id(value: str) -> str:
@@ -391,6 +409,33 @@ def scan_official_tools(library_roots: Iterable[Path]) -> list[ProtonTool]:
                 )
             )
     return tools
+
+
+def scan_installed_games(
+    home: Path | None = None,
+    env: Mapping[str, str] | None = None,
+) -> list[InstalledGame]:
+    home = home or Path.home()
+    env = env or os.environ
+    steam_roots = discover_steam_roots(home, env)
+    library_roots = discover_library_roots(steam_roots)
+    games: dict[str, InstalledGame] = {}
+
+    for library_root in library_roots:
+        steamapps = library_root / "steamapps"
+        for manifest in steamapps.glob("appmanifest_*.acf"):
+            text = _read_text(manifest)
+            game_id = _vdf_value(text, "appid")
+            name = _vdf_value(text, "name")
+            install_dir = _vdf_value(text, "installdir")
+            if not game_id.isdigit() or not name or not install_dir:
+                continue
+            tool_manifest = steamapps / "common" / install_dir / "toolmanifest.vdf"
+            if tool_manifest.is_file():
+                continue
+            games.setdefault(game_id, InstalledGame(game_id, name))
+
+    return sorted(games.values(), key=lambda game: (game.name.casefold(), game.game_id))
 
 
 def scan_proton_tools(
@@ -636,7 +681,28 @@ class SelectorManager:
         self.fallback_dir = self.tool_path / "fallback"
         self.games_dir = self.tool_path / "games"
         self.game_mappings_path = self.tool_path / GAME_MAPPINGS_CSV
+        self.proton_environment_path = self.tool_path / "proton-environment"
         self.legacy_adapter_path = data_home(self.home, self.env) / "tool"
+
+    def proton_environment_options(self) -> set[str]:
+        try:
+            configured = self.proton_environment_path.read_text(
+                encoding="utf-8"
+            ).splitlines()
+        except OSError:
+            return set()
+        return set(configured).intersection(PROTON_ENVIRONMENT_OPTIONS)
+
+    def save_proton_environment(self, options: Iterable[str]) -> None:
+        enabled = set(options).intersection(PROTON_ENVIRONMENT_OPTIONS)
+        _atomic_write(
+            self.proton_environment_path,
+            "".join(
+                f"{option}\n"
+                for option in PROTON_ENVIRONMENT_OPTIONS
+                if option in enabled
+            ),
+        )
 
     def find_base(self, tools: Iterable[ProtonTool]) -> ProtonTool | None:
         exact = [tool for tool in tools if tool.display_name == self.base_name]
@@ -731,6 +797,18 @@ class SelectorManager:
         if not normalized:
             return None
         return self._read_game_mappings().get(normalized)
+
+    def clear_game_mapping(self, game_id: str) -> bool:
+        normalized = normalize_game_id(game_id)
+        if not normalized or not self._validate_existing_tool_path():
+            return False
+        mappings = self._read_game_mappings()
+        mapping = mappings.pop(normalized, None)
+        if mapping is None:
+            return False
+        self._write_game_mappings(self.tool_path, mappings)
+        _remove_managed_path(self.games_dir / mapping.managed_directory)
+        return True
 
     def _write_game_mappings(
         self,
@@ -881,6 +959,7 @@ class SelectorManager:
         game_id: str = "",
         game_tool: ProtonTool | None = None,
         progress: Callable[[str], None] | None = None,
+        proton_environment: Iterable[str] | None = None,
     ) -> ActivationResult:
         progress = progress or (lambda _message: None)
         selected_path = self._validate_source(
@@ -983,6 +1062,8 @@ class SelectorManager:
             finally:
                 _remove_managed_path(staged_tool)
 
+        if proton_environment is not None:
+            self.save_proton_environment(proton_environment)
         progress(_("ready"))
         return ActivationResult(
             first_activation=not already_registered,
@@ -1194,687 +1275,6 @@ def _run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     return 0
 
 
-class ProtonSelectorWindow(Gtk.ApplicationWindow):
-    def __init__(self, application: Gtk.Application) -> None:
-        super().__init__(
-            application=application,
-            title=APP_NAME,
-            default_width=820,
-            default_height=650,
-        )
-        self.manager = SelectorManager()
-        self.tools: list[ProtonTool] = []
-        self.base_tool: ProtonTool | None = None
-        self.copying = False
-        self.pulse_source = 0
-        environment_override = os.environ.get("PROTON_SELECTOR_LANGUAGE", "")
-        if environment_override:
-            self.language_preference = _.language
-        else:
-            self.language_preference = saved_language_preference()
-            if self.language_preference == "system":
-                _.use_system_language()
-            else:
-                _.set_language(self.language_preference)
-
-        self._build_ui()
-        self.refresh()
-
-    def _build_ui(self) -> None:
-        overlay = Gtk.Overlay()
-        self.set_child(overlay)
-
-        outer = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=12,
-            margin_top=18,
-            margin_bottom=18,
-            margin_start=18,
-            margin_end=18,
-        )
-        content_scroller = Gtk.ScrolledWindow(
-            hscrollbar_policy=Gtk.PolicyType.NEVER,
-            vscrollbar_policy=Gtk.PolicyType.AUTOMATIC,
-        )
-        content_scroller.set_child(outer)
-        overlay.set_child(content_scroller)
-
-        title_row = Gtk.Box(
-            orientation=Gtk.Orientation.HORIZONTAL,
-            spacing=12,
-        )
-        title = Gtk.Label(label=APP_NAME, xalign=0, hexpand=True)
-        title.add_css_class("title-1")
-        title_row.append(title)
-
-        language_box = Gtk.Box(
-            orientation=Gtk.Orientation.HORIZONTAL,
-            spacing=8,
-            valign=Gtk.Align.CENTER,
-        )
-        language_box.append(Gtk.Label(label=_("language")))
-        self.language_option_codes = ["system", *LANGUAGE_NAMES]
-        language_model = Gtk.StringList()
-        language_model.splice(
-            0,
-            0,
-            [
-                _("system_default"),
-                *(LANGUAGE_NAMES[code] for code in LANGUAGE_NAMES),
-            ],
-        )
-        self.language_dropdown = Gtk.DropDown(model=language_model)
-        selected_language_index = (
-            self.language_option_codes.index(self.language_preference)
-            if self.language_preference in self.language_option_codes
-            else 0
-        )
-        self.language_dropdown.set_selected(selected_language_index)
-        self.language_dropdown.connect(
-            "notify::selected",
-            self._language_changed,
-        )
-        language_box.append(self.language_dropdown)
-        title_row.append(language_box)
-        outer.append(title_row)
-
-        subtitle = Gtk.Label(
-            label=_("instruction"),
-            xalign=0,
-            wrap=True,
-        )
-        outer.append(subtitle)
-
-        version_label = Gtk.Label(label=_("active_version"), xalign=0)
-        version_label.add_css_class("heading")
-        outer.append(version_label)
-
-        self.version_model = Gtk.StringList()
-        self.version_dropdown = Gtk.DropDown(
-            model=self.version_model,
-            hexpand=True,
-        )
-        if hasattr(self.version_dropdown, "set_enable_search"):
-            self.version_dropdown.set_enable_search(True)
-        self.version_dropdown.connect("notify::selected", self._selection_changed)
-        outer.append(self.version_dropdown)
-
-        fallback_label = Gtk.Label(label=_("fallback_version"), xalign=0)
-        fallback_label.add_css_class("heading")
-        outer.append(fallback_label)
-
-        self.fallback_dropdown = Gtk.DropDown(
-            model=self.version_model,
-            hexpand=True,
-        )
-        if hasattr(self.fallback_dropdown, "set_enable_search"):
-            self.fallback_dropdown.set_enable_search(True)
-        self.fallback_dropdown.connect("notify::selected", self._selection_changed)
-        outer.append(self.fallback_dropdown)
-
-        game_id_label = Gtk.Label(label=_("game_id_optional"), xalign=0)
-        game_id_label.add_css_class("heading")
-        outer.append(game_id_label)
-
-        self.game_id_entry = Gtk.Entry(
-            placeholder_text=_("game_id_placeholder"),
-            hexpand=True,
-        )
-        self.game_id_entry.connect("changed", self._game_id_changed)
-        outer.append(self.game_id_entry)
-
-        game_label = Gtk.Label(label=_("game_version"), xalign=0)
-        game_label.add_css_class("heading")
-        outer.append(game_label)
-
-        self.game_dropdown = Gtk.DropDown(
-            model=self.version_model,
-            hexpand=True,
-            sensitive=False,
-        )
-        if hasattr(self.game_dropdown, "set_enable_search"):
-            self.game_dropdown.set_enable_search(True)
-        self.game_dropdown.connect("notify::selected", self._selection_changed)
-        outer.append(self.game_dropdown)
-
-        details = Gtk.Grid(
-            column_spacing=12,
-            row_spacing=6,
-            margin_top=4,
-            margin_bottom=4,
-        )
-        details.attach(Gtk.Label(label=_("runtime_appid"), xalign=0), 0, 0, 1, 1)
-        details.attach(Gtk.Label(label=_("location"), xalign=0), 0, 1, 1, 1)
-        details.attach(Gtk.Label(label=_("source"), xalign=0), 0, 2, 1, 1)
-
-        self.runtime_label = Gtk.Label(xalign=0, selectable=True)
-        self.location_label = Gtk.Label(
-            xalign=0,
-            hexpand=True,
-            selectable=True,
-            ellipsize=Pango.EllipsizeMode.MIDDLE,
-        )
-        self.source_label = Gtk.Label(
-            xalign=0,
-            hexpand=True,
-            selectable=True,
-            ellipsize=Pango.EllipsizeMode.MIDDLE,
-        )
-        self.runtime_label.add_css_class("dim-label")
-        self.location_label.add_css_class("dim-label")
-        self.source_label.add_css_class("dim-label")
-        details.attach(self.runtime_label, 1, 0, 1, 1)
-        details.attach(self.location_label, 1, 1, 1, 1)
-        details.attach(self.source_label, 1, 2, 1, 1)
-        outer.append(details)
-
-        button_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self.refresh_button = Gtk.Button(label=_("refresh"))
-        self.refresh_button.connect("clicked", lambda _button: self.refresh())
-        button_row.append(self.refresh_button)
-
-        spacer = Gtk.Box(hexpand=True)
-        button_row.append(spacer)
-
-        self.activate_button = Gtk.Button(label=_("use_selected"))
-        self.activate_button.add_css_class("suggested-action")
-        self.activate_button.set_sensitive(False)
-        self.activate_button.connect("clicked", lambda _button: self.activate_selected())
-        button_row.append(self.activate_button)
-        outer.append(button_row)
-
-        self.copy_progress = Gtk.ProgressBar(show_text=True, visible=False)
-        outer.append(self.copy_progress)
-
-        outer.append(Gtk.Separator())
-        self.status_label = Gtk.Label(
-            label=_("scanning"),
-            xalign=0,
-            wrap=True,
-            selectable=True,
-        )
-        outer.append(self.status_label)
-
-        self.notification_revealer = Gtk.Revealer(
-            transition_type=Gtk.RevealerTransitionType.SLIDE_UP,
-            transition_duration=250,
-            reveal_child=False,
-            halign=Gtk.Align.FILL,
-            valign=Gtk.Align.END,
-            hexpand=True,
-            margin_bottom=18,
-            margin_start=18,
-            margin_end=18,
-        )
-        self.notification_frame = Gtk.Frame()
-        self.notification_frame.add_css_class("osd")
-        notification_row = Gtk.Box(
-            orientation=Gtk.Orientation.HORIZONTAL,
-            spacing=12,
-            margin_top=12,
-            margin_bottom=12,
-            margin_start=12,
-            margin_end=12,
-        )
-        notification_text = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=4,
-            hexpand=True,
-        )
-        self.notification_title = Gtk.Label(xalign=0, wrap=True)
-        self.notification_title.add_css_class("heading")
-        self.notification_body = Gtk.Label(xalign=0, wrap=True)
-        notification_text.append(self.notification_title)
-        notification_text.append(self.notification_body)
-        notification_row.append(notification_text)
-
-        self.notification_close = Gtk.Button(
-            label=_("close"),
-            valign=Gtk.Align.CENTER,
-        )
-        self.notification_close.connect("clicked", self._close_notification)
-        notification_row.append(self.notification_close)
-        self.notification_frame.set_child(notification_row)
-        self.notification_revealer.set_child(self.notification_frame)
-        overlay.add_overlay(self.notification_revealer)
-
-    def _language_changed(
-        self,
-        dropdown: Gtk.DropDown,
-        _parameter: object,
-    ) -> None:
-        index = dropdown.get_selected()
-        if index < 0 or index >= len(self.language_option_codes):
-            return
-        preference = self.language_option_codes[index]
-        if preference == self.language_preference:
-            return
-
-        active_tool = self._selected_tool()
-        fallback_tool = self._selected_fallback_tool()
-        game_tool = self._selected_game_tool()
-        active_path = str(active_tool.canonical_path) if active_tool else ""
-        fallback_path = (
-            str(fallback_tool.canonical_path) if fallback_tool else ""
-        )
-        game_path = str(game_tool.canonical_path) if game_tool else ""
-        game_id = self.game_id_entry.get_text()
-
-        if preference == "system":
-            _.use_system_language()
-        else:
-            _.set_language(preference)
-        save_language_preference(preference)
-        self.language_preference = preference
-
-        self._build_ui()
-        self.refresh()
-        for dropdown_widget, path in (
-            (self.version_dropdown, active_path),
-            (self.fallback_dropdown, fallback_path),
-        ):
-            selected_index = self._tool_index_for_path(path)
-            if selected_index >= 0:
-                dropdown_widget.set_selected(selected_index)
-        self.game_id_entry.set_text(game_id)
-        selected_game_index = self._tool_index_for_path(game_path)
-        if selected_game_index >= 0:
-            self.game_dropdown.set_selected(selected_game_index)
-        self.refresh()
-
-    def _selected_tool(self) -> ProtonTool | None:
-        index = self.version_dropdown.get_selected()
-        if index < 0 or index >= len(self.tools):
-            return None
-        return self.tools[index]
-
-    def _selected_fallback_tool(self) -> ProtonTool | None:
-        index = self.fallback_dropdown.get_selected()
-        if index < 0 or index >= len(self.tools):
-            return None
-        return self.tools[index]
-
-    def _selected_game_tool(self) -> ProtonTool | None:
-        index = self.game_dropdown.get_selected()
-        if index < 0 or index >= len(self.tools):
-            return None
-        return self.tools[index]
-
-    def _tool_index_for_path(self, path: str) -> int:
-        if not path:
-            return -1
-        return next(
-            (
-                index
-                for index, tool in enumerate(self.tools)
-                if str(tool.canonical_path) == path
-            ),
-            -1,
-        )
-
-    def _game_id_changed(self, _entry: Gtk.Entry) -> None:
-        raw_game_id = self.game_id_entry.get_text()
-        try:
-            game_id = normalize_game_id(raw_game_id)
-        except RuntimeError as error:
-            self.game_id_entry.add_css_class("error")
-            self.game_id_entry.set_tooltip_text(str(error))
-            self.game_dropdown.set_sensitive(False)
-            self._selection_changed(self.game_dropdown, None)
-            return
-
-        self.game_id_entry.remove_css_class("error")
-        self.game_id_entry.set_tooltip_text(None)
-        self.game_dropdown.set_sensitive(bool(game_id) and not self.copying)
-        if game_id:
-            mapping = self.manager.game_mapping(game_id)
-            mapped_index = self._tool_index_for_path(
-                mapping.source_path if mapping else ""
-            )
-            if mapped_index < 0:
-                mapped_index = self.version_dropdown.get_selected()
-            if 0 <= mapped_index < len(self.tools):
-                self.game_dropdown.set_selected(mapped_index)
-        self._selection_changed(self.game_dropdown, None)
-
-    def _selection_changed(
-        self,
-        _dropdown: Gtk.DropDown,
-        _parameter: object,
-    ) -> None:
-        tool = self._selected_tool()
-        fallback_tool = self._selected_fallback_tool()
-        raw_game_id = self.game_id_entry.get_text()
-        try:
-            game_id = normalize_game_id(raw_game_id)
-            valid_game_id = True
-        except RuntimeError:
-            game_id = ""
-            valid_game_id = False
-        game_tool = self._selected_game_tool() if game_id else None
-        self.activate_button.set_sensitive(
-            not self.copying
-            and tool is not None
-            and fallback_tool is not None
-            and self.base_tool is not None
-            and valid_game_id
-            and (not game_id or game_tool is not None)
-        )
-        if _dropdown is not self.version_dropdown:
-            return
-        if tool is None:
-            self.runtime_label.set_text("—")
-            self.location_label.set_text("—")
-            self.source_label.set_text("—")
-            return
-        self.runtime_label.set_text(tool.runtime_appid or "—")
-        self.location_label.set_text(str(tool.path))
-        self.location_label.set_tooltip_text(str(tool.path))
-        self.source_label.set_text(tool.source)
-        self.source_label.set_tooltip_text(tool.source)
-
-    def refresh(self) -> None:
-        if self.copying:
-            return
-        previous_path = ""
-        previous_fallback_path = ""
-        previous_game_path = ""
-        selected = self._selected_tool()
-        selected_fallback = self._selected_fallback_tool()
-        selected_game = self._selected_game_tool()
-        if selected:
-            previous_path = str(selected.canonical_path)
-        if selected_fallback:
-            previous_fallback_path = str(selected_fallback.canonical_path)
-        if selected_game:
-            previous_game_path = str(selected_game.canonical_path)
-
-        self.tools = scan_proton_tools()
-        self.base_tool = self.manager.find_base(self.tools)
-        current = self.manager.current_target()
-        current_fallback = self.manager.current_fallback_target()
-        current_key = str(current) if current else ""
-        current_fallback_key = str(current_fallback) if current_fallback else ""
-
-        selected_index = -1
-        fallback_index = -1
-        game_index = -1
-        name_counts = Counter(tool.display_name for tool in self.tools)
-        dropdown_labels: list[str] = []
-        for index, tool in enumerate(self.tools):
-            label = tool.display_name
-            if name_counts[tool.display_name] > 1:
-                label = f"{label} — {tool.path}"
-            dropdown_labels.append(label)
-            canonical = str(tool.canonical_path)
-            if canonical == previous_path or (not previous_path and canonical == current_key):
-                selected_index = index
-            if canonical == previous_fallback_path or (
-                not previous_fallback_path and canonical == current_fallback_key
-            ):
-                fallback_index = index
-            if canonical == previous_game_path:
-                game_index = index
-        self.version_model.splice(
-            0,
-            self.version_model.get_n_items(),
-            dropdown_labels,
-        )
-
-        # Make the primary action immediately available. Prefer the previous or
-        # active build, then Valve's stable base, then the first discovered tool.
-        if selected_index < 0 and self.base_tool:
-            base_path = str(self.base_tool.canonical_path)
-            selected_index = next(
-                (
-                    index
-                    for index, tool in enumerate(self.tools)
-                    if str(tool.canonical_path) == base_path
-                ),
-                -1,
-            )
-        if selected_index < 0 and self.tools:
-            selected_index = 0
-        if selected_index >= 0:
-            self.version_dropdown.set_selected(selected_index)
-
-        if fallback_index < 0 and self.base_tool:
-            base_path = str(self.base_tool.canonical_path)
-            fallback_index = next(
-                (
-                    index
-                    for index, tool in enumerate(self.tools)
-                    if str(tool.canonical_path) == base_path
-                ),
-                -1,
-            )
-        if fallback_index < 0 and self.tools:
-            fallback_index = 0
-        if fallback_index >= 0:
-            self.fallback_dropdown.set_selected(fallback_index)
-
-        raw_game_id = self.game_id_entry.get_text()
-        try:
-            game_id = normalize_game_id(raw_game_id)
-        except RuntimeError:
-            game_id = ""
-        if game_id and not previous_game_path:
-            mapping = self.manager.game_mapping(game_id)
-            game_index = self._tool_index_for_path(
-                mapping.source_path if mapping else ""
-            )
-        if game_index < 0:
-            game_index = selected_index
-        if game_index >= 0:
-            self.game_dropdown.set_selected(game_index)
-        self.game_dropdown.set_sensitive(bool(game_id) and not self.copying)
-
-        game_mapping = self.manager.game_mapping(game_id) if game_id else None
-        if game_mapping and self.manager.game_copy_available(game_mapping):
-            active = game_mapping.proton_name
-        elif game_mapping:
-            active = _(
-                "files_missing",
-                name=game_mapping.proton_name,
-            )
-        else:
-            saved_name = self.manager.saved_selection_name()
-            if saved_name and self.manager.selected_copy_available():
-                active = saved_name
-            elif saved_name:
-                active = _("files_missing", name=saved_name)
-            else:
-                active = _("none")
-
-        saved_fallback_name = self.manager.saved_fallback_name()
-        if saved_fallback_name and self.manager.fallback_copy_available():
-            fallback = saved_fallback_name
-        elif saved_fallback_name:
-            fallback = _("files_missing", name=saved_fallback_name)
-        elif self.base_tool:
-            fallback = self.base_tool.display_name
-        else:
-            fallback = _("not_installed", name=self.manager.base_name)
-        self.status_label.set_text(
-            f'{_("status_active", version=active)}\n'
-            f'{_("status_fallback", version=fallback)}'
-        )
-        self._selection_changed(self.version_dropdown, None)
-
-    def _notify(
-        self,
-        title: str,
-        body: str,
-        error: bool = False,
-    ) -> None:
-        self.notification_title.set_text(
-            _("error_title", app_name=title) if error else title
-        )
-        self.notification_body.set_text(body)
-        self.notification_frame.remove_css_class("error")
-        if error:
-            self.notification_frame.add_css_class("error")
-        self.notification_revealer.set_reveal_child(True)
-        self.notification_close.grab_focus()
-
-    def _close_notification(self, _button: Gtk.Button) -> None:
-        self.notification_revealer.set_reveal_child(False)
-        if self.activate_button.get_sensitive():
-            self.activate_button.grab_focus()
-        else:
-            self.game_id_entry.grab_focus()
-
-    def activate_selected(self) -> None:
-        selected_tool = self._selected_tool()
-        fallback_tool = self._selected_fallback_tool()
-        raw_game_id = self.game_id_entry.get_text()
-        try:
-            game_id = normalize_game_id(raw_game_id)
-        except RuntimeError as error:
-            self._notify(APP_NAME, str(error), error=True)
-            return
-        game_tool = self._selected_game_tool() if game_id else None
-        if (
-            self.copying
-            or selected_tool is None
-            or fallback_tool is None
-            or (game_id and game_tool is None)
-            or not self.base_tool
-        ):
-            return
-        base_tool = self.base_tool
-        self.copying = True
-        self.notification_revealer.set_reveal_child(False)
-        self.version_dropdown.set_sensitive(False)
-        self.fallback_dropdown.set_sensitive(False)
-        self.game_id_entry.set_sensitive(False)
-        self.game_dropdown.set_sensitive(False)
-        self.refresh_button.set_sensitive(False)
-        self.activate_button.set_sensitive(False)
-        self.activate_button.set_label(_("copying"))
-        self.copy_progress.set_text(_("preparing"))
-        self.copy_progress.set_visible(True)
-        self.pulse_source = GLib.timeout_add(100, self._pulse_copy_progress)
-
-        worker = threading.Thread(
-            target=self._activation_worker,
-            args=(selected_tool, fallback_tool, base_tool, game_id, game_tool),
-            daemon=True,
-        )
-        worker.start()
-
-    def _pulse_copy_progress(self) -> bool:
-        if not self.copying:
-            return False
-        self.copy_progress.pulse()
-        return True
-
-    def _set_copy_progress(self, message: str) -> bool:
-        self.copy_progress.set_text(message)
-        return False
-
-    def _activation_worker(
-        self,
-        selected_tool: ProtonTool,
-        fallback_tool: ProtonTool,
-        base_tool: ProtonTool,
-        game_id: str,
-        game_tool: ProtonTool | None,
-    ) -> None:
-        result: ActivationResult | None = None
-        error: Exception | None = None
-        try:
-            result = self.manager.activate(
-                selected_tool,
-                fallback_tool,
-                base_tool,
-                game_id=game_id,
-                game_tool=game_tool,
-                progress=lambda message: GLib.idle_add(
-                    self._set_copy_progress,
-                    message,
-                ),
-            )
-        except Exception as caught:
-            error = caught
-        GLib.idle_add(
-            self._activation_finished,
-            selected_tool,
-            game_id,
-            game_tool,
-            result,
-            error,
-        )
-
-    def _activation_finished(
-        self,
-        selected_tool: ProtonTool,
-        game_id: str,
-        game_tool: ProtonTool | None,
-        result: ActivationResult | None,
-        error: Exception | None,
-    ) -> bool:
-        self.copying = False
-        if self.pulse_source:
-            GLib.source_remove(self.pulse_source)
-            self.pulse_source = 0
-        self.copy_progress.set_visible(False)
-        self.activate_button.set_label(_("use_selected"))
-        self.version_dropdown.set_sensitive(True)
-        self.fallback_dropdown.set_sensitive(True)
-        self.game_id_entry.set_sensitive(True)
-        self.refresh_button.set_sensitive(True)
-        self.refresh()
-
-        if error is not None:
-            self._notify(APP_NAME, str(error), error=True)
-            return False
-        if result is None:
-            self._notify(APP_NAME, _("operation_incomplete"), error=True)
-            return False
-        if game_id and game_tool:
-            success_text = (
-                _(
-                    "game_success",
-                    game_id=game_id,
-                    name=game_tool.display_name,
-                )
-                + "\n\n"
-                + _("game_copies_ready")
-            )
-        else:
-            success_text = (
-                _("selector_success", name=selected_tool.display_name)
-                + "\n\n"
-                + _("default_copies_ready")
-            )
-        if result.first_activation:
-            self._notify(
-                APP_NAME,
-                (
-                    f"{success_text}\n\n"
-                    + _("restart_first")
-                ),
-            )
-        else:
-            self._notify(
-                APP_NAME,
-                success_text,
-            )
-        return False
-
-
-class ProtonSelectorApplication(Gtk.Application):
-    def __init__(self) -> None:
-        super().__init__(application_id="io.github.protonselector.ProtonSelector")
-
-    def do_activate(self) -> None:
-        window = self.props.active_window
-        if window is None:
-            window = ProtonSelectorWindow(self)
-        window.present()
-
-
 def main() -> int:
     if len(sys.argv) > 1:
         if not os.environ.get("PROTON_SELECTOR_LANGUAGE"):
@@ -1889,8 +1289,9 @@ def main() -> int:
             return _run_cli(arguments, parser)
         except RuntimeError as error:
             parser.exit(1, f"{parser.prog}: error: {error}\n")
-    application = ProtonSelectorApplication()
-    return application.run(sys.argv)
+    from proton_selector_qt import run_application
+
+    return run_application(sys.modules[__name__])
 
 
 if __name__ == "__main__":
