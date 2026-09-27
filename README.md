@@ -8,9 +8,8 @@ interface.
 
 Steam normally discovers a new directory in `compatibilitytools.d` only during
 client startup. Proton Selector works around that limitation by registering one
-permanent tool directory named **Proton Selector**. Complete Active, Fallback,
-and optional per-game Proton builds are maintained inside that stable
-directory.
+permanent tool directory named **Proton Selector**. Active, Fallback, and
+optional per-game Proton builds are linked from that stable directory.
 
 ## How it works
 
@@ -27,47 +26,36 @@ The application creates this layout after the first selection:
 ├── toolmanifest.vdf        # Copied from Valve Proton 11.0
 ├── proton                  # Small launcher for the selected build
 ├── game-mappings.csv       # Game IDs and their selected Proton builds
-├── selected/               # Complete copy of the chosen active Proton
-├── fallback/               # Complete copy of the chosen fallback Proton
-└── games/                  # One managed Proton copy per configured game ID
+├── selected/               # Symlink to the chosen active Proton
+├── fallback/               # Symlink to the chosen fallback Proton
+└── games/                  # One Proton symlink per configured game ID
     └── game-<id-hash>/
 ```
 
 The top-level `Proton Selector` directory and its Steam identity remain in
-place. New selected and fallback builds are copied into staging directories and
-exchanged with their managed directories only after each copy is complete.
-Original Proton installations are never modified.
-
-Before copying over an existing managed Active, Fallback, or Game directory,
-Proton Selector compares the source and destination `version` files. If they
-match and the managed Proton launcher is present, the existing files are left
-untouched. Tools without a `version` file use source metadata to make the same
-decision.
-
-On filesystems that support copy-on-write reflinks, including Btrfs, Proton
-Selector uses them to create independent copies quickly without immediately
-duplicating all file data. It falls back to normal file copies on other
-filesystems. Proton's own internal symlinks are preserved within each copy.
+place. Active, fallback, and per-game Proton paths link directly to their
+original installations. Changing a selection replaces only its managed symlink;
+the original Proton installations are never modified.
 
 Steam continues to see the same internal tool name, display name, installation
 path, and Valve Proton 11 runtime metadata. Proton Selector does not rewrite
-those cached values when changing versions; only the managed copy contents
-change.
+those cached values when changing versions; only the managed links and
+selection metadata change.
 
 Pointing `install_path` directly at each selected build would require Steam to
 read the VDF again and would therefore bring back the restart requirement.
 
 The fallback is independently selectable and defaults to Valve `Proton 11.0`,
-or `Proton 11.0 (ARM64)` on ARM64/AArch64. If the managed selected copy is
-damaged or removed, the launcher automatically uses the managed fallback copy.
+or `Proton 11.0 (ARM64)` on ARM64/AArch64. If the selected installation is
+unavailable, the launcher automatically uses the managed fallback link.
 
 An optional per-game selection can be associated with either a numeric Steam
 game ID or an UMU ID such as `umu-12345`. Mappings are stored in
 `game-mappings.csv` and updated in place when a game is assigned another Proton
 version. At launch, the wrapper checks `SteamGameId` first, followed by
 `GAMEID`, `UMU_ID`, `STEAM_COMPAT_APP_ID`, and `SteamAppId`. A matching Game
-copy acts as the Active version for that launch. An unmatched launch uses the
-normal Active copy, and an unavailable Active copy uses Fallback.
+link acts as the Active version for that launch. An unmatched launch uses the
+normal Active link, and an unavailable Active link uses Fallback.
 
 ## Requirements
 
@@ -151,7 +139,7 @@ installing it:
 3. Select the default **Active Version**.
 4. Select the safety **Fallback Version**. This defaults to Valve Proton 11.0.
 5. Click **Use Selected Version**.
-6. Wait for the in-app notification confirming that the managed copies are
+6. Wait for the in-app notification confirming that the managed links are
    ready, then close the notification.
 7. Because this is the first setup, restart Steam once so Steam can discover
    the new **Proton Selector** compatibility tool.
@@ -205,8 +193,8 @@ continue to use their own mappings or the default Active Version. No Steam
 restart is needed.
 
 Use **Refresh** if a Proton build is installed while Proton Selector is already
-open. A matching source and managed `version` file is detected as current, so
-unchanged Proton files are not copied again.
+open. Active, fallback, and per-game paths are symlinks to their selected
+source folders; changing a version retargets the corresponding link.
 
 ## Languages
 
@@ -309,10 +297,10 @@ path. Use a path when two installations have the same display name. Unspecified
 Active and Fallback selections remain unchanged. `--game-id` and `--game` must
 always be supplied together.
 
-The CLI prints copy progress and uses the same safe managed-copy and CSV update
-code as the graphical interface. Matching `version` files are not copied
-again. If the CLI creates the permanent compatibility tool for the first time,
-restart Steam once; later CLI changes do not require a restart.
+The CLI prints progress and uses the same managed-link and CSV update code as
+the graphical interface. If the CLI creates the permanent
+compatibility tool for the first time, restart Steam once; later CLI changes do
+not require a restart.
 
 Change the saved interface language from the terminal:
 
@@ -364,7 +352,7 @@ These are primarily useful for unusual Steam installations and testing:
 
 Proton Selector will not overwrite an existing file, directory, or unrelated
 symlink named `Proton Selector`. It only replaces the application-owned
-`selected`, `fallback`, and hashed `games` copies and never deletes the original
+`selected`, `fallback`, and hashed `games` links and never deletes the original
 Proton installations or the permanent selector directory. GAME IDs are limited
 to letters, numbers, periods, underscores, colons, and hyphens, so they cannot
 be used as filesystem paths.

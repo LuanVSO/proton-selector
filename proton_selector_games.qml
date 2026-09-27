@@ -25,11 +25,11 @@ Kirigami.ApplicationWindow {
     pageStack.initialPage: Kirigami.ScrollablePage {
         id: gamePage
         property var selector: gameWindow.appController
+        property string searchQuery: gameSearchField.text.trim().toLocaleLowerCase()
         property var filteredGames: {
-            var query = gameSearchField.text.trim().toLocaleLowerCase()
             return gamePage.selector.installedGames.filter(function(game) {
                 var searchableText = game.name + " " + game.gameId
-                return searchableText.toLocaleLowerCase().includes(query)
+                return searchableText.toLocaleLowerCase().includes(gamePage.searchQuery)
             })
         }
 
@@ -61,24 +61,17 @@ Kirigami.ApplicationWindow {
                 wrapMode: Text.WordWrap
             }
 
-            Repeater {
-                model: gamePage.filteredGames
+            Kirigami.FormLayout {
+                Layout.fillWidth: true
 
-                delegate: RowLayout {
-                    Layout.fillWidth: true
-                    spacing: Kirigami.Units.largeSpacing
+                Repeater {
+                    model: gamePage.selector.installedGames
 
-                    Controls.Label {
+                    delegate: Controls.ComboBox {
+                        Kirigami.FormData.label: modelData.name
                         Layout.fillWidth: true
-                        Layout.minimumWidth: 80
-                        text: modelData.name
-                        elide: Text.ElideRight
-                        Controls.ToolTip.text:
-                            modelData.name + " (" + modelData.gameId + ")"
-                    }
-
-                    Controls.ComboBox {
-                        Layout.minimumWidth: 180
+                        visible: (modelData.name + " " + modelData.gameId)
+                            .toLocaleLowerCase().includes(gamePage.searchQuery)
                         model: gamePage.selector.gameVersionOptions
                         textRole: "label"
                         currentIndex: modelData.versionIndex
@@ -88,6 +81,8 @@ Kirigami.ApplicationWindow {
                             currentIndex
                         )
                         Accessible.name: modelData.name + " Proton version"
+                        Controls.ToolTip.text:
+                            modelData.name + " (" + modelData.gameId + ")"
                     }
                 }
             }
