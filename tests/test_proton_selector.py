@@ -165,12 +165,15 @@ class ProtonSelectorTests(unittest.TestCase):
         write_executable(
             self.ge_one / "proton",
             '#!/bin/sh\n[ "${PROTON_NO_FSYNC-}" ]\n'
-            '[ "${PROTON_LOG_DIR-}" ]\n[ "${PROTON_CUSTOM_VALUE-}" ]\n',
+            '[ "${PROTON_LOG_DIR-}" ]\n[ "${PROTON_CUSTOM_VALUE-}" ]\n'
+            'self.check_environment("PROTON_NO_FSYNC", "nofsync")\n',
         )
         write_executable(
             self.ge_two / "proton",
             '#!/bin/sh\n[ "${PROTON_USE_WINED3D-}" ]\n'
-            '[ "${PROTON_FORCE_NVAPI-}" ]\n',
+            '[ "${PROTON_FORCE_NVAPI-}" ]\n'
+            'self.check_environment("PROTON_USE_WINED3D", "wined3d")\n'
+            'self.check_environment("PROTON_FORCE_NVAPI", "forcenvapi")\n',
         )
 
         self.assertEqual(
@@ -180,6 +183,21 @@ class ProtonSelectorTests(unittest.TestCase):
         self.assertEqual(
             set(proton_selector.proton_environment_variables(self.ge_two)),
             {"PROTON_USE_WINED3D", "PROTON_FORCE_NVAPI"},
+        )
+        self.assertEqual(
+            proton_selector.proton_environment_variable_types(self.ge_one),
+            {
+                "PROTON_NO_FSYNC": "boolean",
+                "PROTON_CUSTOM_VALUE": "string",
+                "PROTON_LOG_DIR": "string",
+            },
+        )
+        self.assertEqual(
+            proton_selector.proton_environment_variable_types(self.ge_two),
+            {
+                "PROTON_FORCE_NVAPI": "boolean",
+                "PROTON_USE_WINED3D": "boolean",
+            },
         )
 
     def test_installs_verified_proton_wineland_variant(self) -> None:

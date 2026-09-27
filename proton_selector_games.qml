@@ -78,7 +78,6 @@ Kirigami.ApplicationWindow {
                     }
 
                     Controls.ComboBox {
-                        Layout.fillWidth: true
                         Layout.minimumWidth: 180
                         model: gamePage.selector.gameVersionOptions
                         textRole: "label"

@@ -8,10 +8,7 @@ Kirigami.ApplicationWindow {
     property var appController: protonSelector
 
     width: 720
-    height: Math.max(
-        minimumHeight,
-        page.implicitHeight + Kirigami.Units.gridUnit * 2
-    )
+    height: Math.max(minimumHeight, Kirigami.Units.gridUnit * 35)
     minimumWidth: 520
     minimumHeight: 400
     title: "Proton Selector"
@@ -70,32 +67,25 @@ Kirigami.ApplicationWindow {
                     Accessible.name: page.selector.translations.fallback_version
                 }
 
-            }
+                RowLayout {
+                    Kirigami.FormData.label: "Proton Wineland"
 
-            RowLayout {
-                Layout.fillWidth: true
+                    Controls.ComboBox {
+                        Layout.fillWidth: true
+                        model: page.selector.winelandVariants
+                        textRole: "label"
+                        currentIndex: page.selector.winelandVariantIndex
+                        enabled: !page.selector.copying
+                        onActivated: page.selector.setWinelandVariantIndex(currentIndex)
+                        Accessible.name: "Proton Wineland variant"
+                    }
 
-                Controls.Label {
-                    text: "Proton Wineland"
-                }
-
-                Controls.ComboBox {
-                    Layout.fillWidth: true
-                    model: page.selector.winelandVariants
-                    textRole: "label"
-                    currentIndex: page.selector.winelandVariantIndex
-                    enabled: !page.selector.copying
-                    onActivated: page.selector.setWinelandVariantIndex(currentIndex)
-                    Accessible.name: "Proton Wineland variant"
-                }
-
-                Controls.Button {
-                    text: page.selector.winelandUpdating
-                        ? "Updating..."
-                        : "Update"
-                    icon.name: "view-refresh"
-                    enabled: !page.selector.copying
-                    onClicked: page.selector.updateWineland()
+                    Controls.Button {
+                        text: page.selector.winelandUpdating ? "Updating..." : page.selector.translations.refresh
+                        icon.name: "view-refresh"
+                        enabled: !page.selector.copying
+                        onClicked: page.selector.updateWineland()
+                    }
                 }
             }
 
@@ -123,7 +113,9 @@ Kirigami.ApplicationWindow {
                 columnSpacing: Kirigami.Units.largeSpacing
                 rowSpacing: Kirigami.Units.smallSpacing
 
-                Controls.Label { text: page.selector.translations.runtime_appid }
+                Controls.Label {
+                    text: page.selector.translations.runtime_appid
+                }
                 Controls.Label {
                     Layout.fillWidth: true
                     text: page.selector.runtimeAppId
@@ -131,7 +123,9 @@ Kirigami.ApplicationWindow {
                     Accessible.selectableText: true
                 }
 
-                Controls.Label { text: page.selector.translations.location }
+                Controls.Label {
+                    text: page.selector.translations.location
+                }
                 Controls.Label {
                     Layout.fillWidth: true
                     text: page.selector.location
@@ -140,7 +134,9 @@ Kirigami.ApplicationWindow {
                     Controls.ToolTip.text: page.selector.location
                 }
 
-                Controls.Label { text: page.selector.translations.source }
+                Controls.Label {
+                    text: page.selector.translations.source
+                }
                 Controls.Label {
                     Layout.fillWidth: true
                     text: page.selector.source
@@ -160,14 +156,12 @@ Kirigami.ApplicationWindow {
             Kirigami.InlineMessage {
                 Layout.fillWidth: true
                 visible: page.selector.notificationVisible
-                type: page.selector.notificationIsError
-                    ? Kirigami.MessageType.Error
-                    : Kirigami.MessageType.Information
+                type: page.selector.notificationIsError ? Kirigami.MessageType.Error : Kirigami.MessageType.Information
                 text: page.selector.notificationTitle + "\n" + page.selector.notificationBody
                 showCloseButton: true
                 onVisibleChanged: {
                     if (!visible) {
-                        page.selector.closeNotification()
+                        page.selector.closeNotification();
                     }
                 }
             }
@@ -189,13 +183,14 @@ Kirigami.ApplicationWindow {
                 Layout.fillHeight: true
                 Layout.minimumHeight: Kirigami.Units.smallSpacing
             }
-
-            Kirigami.Separator {
-                Layout.fillWidth: true
-            }
+        }
+        footer: Controls.ToolBar {
+            padding: Kirigami.Units.smallSpacing
 
             RowLayout {
                 Layout.fillWidth: true
+                anchors.fill: parent
+                spacing: Kirigami.Units.smallSpacing
 
                 Controls.Button {
                     text: page.selector.translations.refresh
@@ -204,12 +199,12 @@ Kirigami.ApplicationWindow {
                     onClicked: page.selector.refresh()
                 }
 
-                Item { Layout.fillWidth: true }
+                Item {
+                    Layout.fillWidth: true
+                }
 
                 Controls.Button {
-                    text: page.selector.copying
-                        ? page.selector.translations.copying
-                        : page.selector.translations.use_selected
+                    text: page.selector.copying ? page.selector.translations.copying : page.selector.translations.use_selected
                     icon.name: "dialog-ok-apply"
                     enabled: page.selector.canActivate
                     highlighted: true

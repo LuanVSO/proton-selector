@@ -183,11 +183,12 @@ Version and apply it with **Use Selected Version**.
 
 Choose **Proton Environment...** on the main screen to configure Proton
 variables detected from the selected Active Version's launcher. The list
-includes every `PROTON_*` name found there, and each value is free-form rather
-than assumed to be boolean. Use **Apply to** to edit the global defaults or
-one installed Steam game's overrides. A blank game-specific value inherits
-the global value; a blank global value leaves the variable unset. Per-game
-values are applied after the global defaults, even when that game uses the
+includes every `PROTON_*` name found there. Variables Proton handles as
+boolean toggles use true/false controls; other variables retain free-form
+string values such as paths or debug settings. Use **Apply to** to edit global
+defaults or one installed Steam game's overrides. A blank game-specific value
+inherits the global value; a blank global value leaves the variable unset.
+Per-game values are applied after global defaults, even when that game uses the
 default Proton version. Settings are saved with the managed tool and applied
 on each launch.
 

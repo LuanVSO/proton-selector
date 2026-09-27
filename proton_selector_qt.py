@@ -53,6 +53,7 @@ class SelectorController(QObject):
             self.manager.all_game_proton_environment_variables()
         )
         self._available_proton_environment_variables: tuple[str, ...] = ()
+        self._boolean_proton_environment_variables: set[str] = set()
         self._environment_version_name = "—"
         language_override = os.environ.get("PROTON_SELECTOR_LANGUAGE", "")
         if language_override:
@@ -155,14 +156,37 @@ class SelectorController(QObject):
         )
 
     @Property("QVariantList", notify=stateChanged)
+    def environmentBooleanOptions(self) -> list[dict[str, str]]:
+        inherited_label = (
+            "Inherit global"
+            if self._environment_game_id
+            else "Not set"
+        )
+        return [
+            {"value": "", "label": inherited_label},
+            {"value": "1", "label": "True"},
+            {"value": "0", "label": "False"},
+        ]
+
+    @Property("QVariantList", notify=stateChanged)
     def protonEnvironmentVariables(self) -> list[dict[str, str]]:
         game_values = self._game_proton_environment_values.get(
             self._environment_game_id,
             {},
         )
+        values = (
+            game_values
+            if self._environment_game_id
+            else self._proton_environment_values
+        )
         return [
             {
                 "name": name,
+                "type": (
+                    "boolean"
+                    if name in self._boolean_proton_environment_variables
+                    else "string"
+                ),
                 "value": (
                     game_values.get(name, "")
                     if self._environment_game_id
@@ -173,9 +197,25 @@ class SelectorController(QObject):
                     if self._environment_game_id
                     else ""
                 ),
+                "type": (
+                    "boolean"
+                    if name in self._boolean_proton_environment_variables
+                    else "string"
+                ),
+                "booleanIndex": self._boolean_environment_index(
+                    values.get(name, "")
+                ),
             }
             for name in self._available_proton_environment_variables
         ]
+
+    @staticmethod
+    def _boolean_environment_index(value: str) -> int:
+        if not value:
+            return 0
+        if value.strip().casefold() in {"0", "false", "no", "off"}:
+            return 2
+        return 1
 
     @Property(str, notify=stateChanged)
     def activeVersionName(self) -> str:
@@ -372,7 +412,7 @@ class SelectorController(QObject):
                 )
         self.stateChanged.emit()
 
-    @Slot(str, bool)
+    @Slot(str, str)
     def setProtonEnvironmentVariable(self, name: str, value: str) -> None:
         if self.copying:
             return
@@ -622,11 +662,15 @@ class SelectorController(QObject):
     def _update_proton_environment_variables(self) -> None:
         tool = self._environment_proton_source()
         self._environment_version_name = tool[0] if tool else "—"
-        self._available_proton_environment_variables = (
-            self.backend.proton_environment_variables(tool[1])
-            if tool
-            else ()
+        variable_types = (
+            self.backend.proton_environment_variable_types(tool[1]) if tool else {}
         )
+        self._available_proton_environment_variables = tuple(variable_types)
+        self._boolean_proton_environment_variables = {
+            name
+            for name, variable_type in variable_types.items()
+            if variable_type == "boolean"
+        }
 
     def _environment_proton_source(self) -> tuple[str, Path] | None:
         if self._environment_game_id:

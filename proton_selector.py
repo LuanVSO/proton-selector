@@ -177,6 +177,9 @@ exec "$selected/proton" "$@"
 '''
 
 PROTON_ENVIRONMENT_VARIABLE_PATTERN = re.compile(r"\bPROTON_[A-Z][A-Z0-9_]*\b")
+PROTON_BOOLEAN_ENVIRONMENT_PATTERN = re.compile(
+    r"check_environment\(\s*['\"](PROTON_[A-Z][A-Z0-9_]*)['\"]"
+)
 WINELAND_RELEASE_API = (
     "https://api.github.com/repos/nanomatters/proton-cachyos/releases/latest"
 )
@@ -544,6 +547,15 @@ def installed_proton_wineland_variants(compatibility_dir: Path) -> set[str]:
 def proton_environment_variables(proton_path: Path) -> tuple[str, ...]:
     source = _read_text(proton_path / "proton")
     return tuple(sorted(set(PROTON_ENVIRONMENT_VARIABLE_PATTERN.findall(source))))
+
+
+def proton_environment_variable_types(proton_path: Path) -> dict[str, str]:
+    source = _read_text(proton_path / "proton")
+    boolean_variables = set(PROTON_BOOLEAN_ENVIRONMENT_PATTERN.findall(source))
+    return {
+        name: "boolean" if name in boolean_variables else "string"
+        for name in sorted(set(PROTON_ENVIRONMENT_VARIABLE_PATTERN.findall(source)))
+    }
 
 
 def _safe_extract_tar(archive_path: Path, destination: Path) -> None:

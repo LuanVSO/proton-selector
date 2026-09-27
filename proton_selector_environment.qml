@@ -97,16 +97,36 @@ Kirigami.ApplicationWindow {
                     spacing: Kirigami.Units.largeSpacing
 
                     Controls.Label {
-                        Layout.preferredWidth: 240
-                        Layout.minimumWidth: 140
+                        Layout.preferredWidth: 300
+                        Layout.minimumWidth: 200
                         text: modelData.name
                         elide: Text.ElideRight
                         Accessible.name: modelData.name
                     }
 
+                    Controls.ComboBox {
+                        Layout.fillWidth: true
+                        visible: modelData.type === "boolean"
+                        model: environmentPage.selector.environmentBooleanOptions
+                        textRole: "label"
+                        currentIndex: modelData.booleanIndex
+                        enabled: !environmentPage.selector.copying
+                        onActivated: environmentPage.selector.setProtonEnvironmentVariable(
+                            modelData.name,
+                            environmentPage.selector.environmentBooleanOptions[
+                                currentIndex
+                            ].value
+                        )
+                        Controls.ToolTip.text: modelData.inheritedValue.length > 0
+                            ? "Global default: " + modelData.inheritedValue
+                            : ""
+                        Accessible.name: modelData.name + " boolean value"
+                    }
+
                     Controls.TextField {
                         Layout.fillWidth: true
                         Layout.minimumWidth: 150
+                        visible: modelData.type === "string"
                         text: modelData.value
                         placeholderText: modelData.inheritedValue.length > 0
                             ? "Inherited: " + modelData.inheritedValue
