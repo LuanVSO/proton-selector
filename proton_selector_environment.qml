@@ -97,8 +97,8 @@ Kirigami.ApplicationWindow {
                     spacing: Kirigami.Units.largeSpacing
 
                     Controls.Label {
-                        Layout.preferredWidth: 300
-                        Layout.minimumWidth: 200
+                        Layout.preferredWidth:350
+                        Layout.minimumWidth: 240
                         text: modelData.name
                         elide: Text.ElideRight
                         Accessible.name: modelData.name

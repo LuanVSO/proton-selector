@@ -42,11 +42,17 @@ Kirigami.ApplicationWindow {
                 }
             }
 
-            Kirigami.FormLayout {
+            GridLayout {
                 Layout.fillWidth: true
+                columns: page.width < 620 ? 1 : 2
+                columnSpacing: Kirigami.Units.largeSpacing
+                rowSpacing: Kirigami.Units.smallSpacing
+
+                Controls.Label {
+                    text: page.selector.translations.active_version
+                }
 
                 Controls.ComboBox {
-                    Kirigami.FormData.label: page.selector.translations.active_version
                     Layout.fillWidth: true
                     model: page.selector.versionOptions
                     textRole: "label"
@@ -56,8 +62,11 @@ Kirigami.ApplicationWindow {
                     Accessible.name: page.selector.translations.active_version
                 }
 
+                Controls.Label {
+                    text: page.selector.translations.fallback_version
+                }
+
                 Controls.ComboBox {
-                    Kirigami.FormData.label: page.selector.translations.fallback_version
                     Layout.fillWidth: true
                     model: page.selector.versionOptions
                     textRole: "label"
@@ -67,8 +76,12 @@ Kirigami.ApplicationWindow {
                     Accessible.name: page.selector.translations.fallback_version
                 }
 
+                Controls.Label {
+                    text: "Proton Wineland"
+                }
+
                 RowLayout {
-                    Kirigami.FormData.label: "Proton Wineland"
+                    Layout.fillWidth: true
 
                     Controls.ComboBox {
                         Layout.fillWidth: true

@@ -1345,25 +1345,13 @@ class SelectorManager:
             _remove_managed_path(staged)
         return True
 
-    def _link_tool(self, tool: ProtonTool, destination: Path) -> bool:
-        source = tool.canonical_path
-        if destination.is_symlink() and destination.resolve(strict=False) == source:
-            return False
-
-        staged = destination.with_name(f".{destination.name}.next-{os.getpid()}")
-        _remove_managed_path(staged)
-        try:
-            staged.symlink_to(source, target_is_directory=True)
-            _replace_managed_path(staged, destination)
-        finally:
-            _remove_managed_path(staged)
-        return True
-
     def _update_game_mapping(
         self,
         root: Path,
         game_id: str,
         game_tool: ProtonTool,
+        progress: Callable[[str], None],
+        force: bool = False,
     ) -> None:
         normalized = normalize_game_id(game_id)
         if not normalized:
@@ -1371,9 +1359,12 @@ class SelectorManager:
         directory_name = managed_game_directory(normalized)
         games_dir = root / "games"
         games_dir.mkdir(exist_ok=True)
-        self._link_tool(
+        self._copy_tool(
             game_tool,
             games_dir / directory_name,
+            _("role_game_version", game_id=normalized),
+            progress,
+            force=force,
         )
         mappings = self._read_game_mappings(root)
         mappings[normalized] = GameMapping(
@@ -1464,19 +1455,24 @@ class SelectorManager:
                 fallback_tool,
                 base_manifest,
             )
-            self._link_tool(
+            self._copy_tool(
                 selected_tool,
                 self.selected_dir,
+                _("role_selected_version"),
+                progress,
             )
-            self._link_tool(
+            self._copy_tool(
                 fallback_tool,
                 self.fallback_dir,
+                _("role_fallback_version"),
+                progress,
             )
             if normalized_game_id and game_tool:
                 self._update_game_mapping(
                     self.tool_path,
                     normalized_game_id,
                     game_tool,
+                    progress,
                 )
         else:
             staged_tool = self.compatibility_dir / f".{SLOT_NAME}.new-{os.getpid()}"
@@ -1489,19 +1485,27 @@ class SelectorManager:
                     fallback_tool,
                     base_manifest,
                 )
-                self._link_tool(
+                self._copy_tool(
                     selected_tool,
                     staged_tool / "selected",
+                    _("role_selected_version"),
+                    progress,
+                    force=True,
                 )
-                self._link_tool(
+                self._copy_tool(
                     fallback_tool,
                     staged_tool / "fallback",
+                    _("role_fallback_version"),
+                    progress,
+                    force=True,
                 )
                 if normalized_game_id and game_tool:
                     self._update_game_mapping(
                         staged_tool,
                         normalized_game_id,
                         game_tool,
+                        progress,
+                        force=True,
                     )
                 progress(_("installing"))
                 _replace_managed_path(staged_tool, self.tool_path)
