@@ -38,6 +38,27 @@ Kirigami.ApplicationWindow {
 
         title: "Proton Environment"
 
+        footer: Controls.ToolBar {
+            padding: Kirigami.Units.smallSpacing
+
+            RowLayout {
+                anchors.fill: parent
+                spacing: Kirigami.Units.smallSpacing
+
+                Item {
+                    Layout.fillWidth: true
+                }
+
+                Controls.Button {
+                    text: "Apply"
+                    icon.name: "dialog-ok-apply"
+                    enabled: environmentPage.selector.environmentChangesPending
+                        && !environmentPage.selector.copying
+                    onClicked: environmentPage.selector.applyEnvironmentChanges()
+                }
+            }
+        }
+
         ColumnLayout {
             width: environmentPage.width
             spacing: Kirigami.Units.largeSpacing
@@ -132,7 +153,7 @@ Kirigami.ApplicationWindow {
                             ? "Inherited: " + modelData.inheritedValue
                             : "Not set"
                         enabled: !environmentPage.selector.copying
-                        onEditingFinished: environmentPage.selector.setProtonEnvironmentVariable(
+                        onTextEdited: environmentPage.selector.setProtonEnvironmentVariable(
                             modelData.name,
                             text
                         )

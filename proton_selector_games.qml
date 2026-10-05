@@ -29,6 +29,27 @@ Kirigami.ApplicationWindow {
 
         title: "Installed Steam Games"
 
+        footer: Controls.ToolBar {
+            padding: Kirigami.Units.smallSpacing
+
+            RowLayout {
+                anchors.fill: parent
+                spacing: Kirigami.Units.smallSpacing
+
+                Item {
+                    Layout.fillWidth: true
+                }
+
+                Controls.Button {
+                    text: "Apply"
+                    icon.name: "dialog-ok-apply"
+                    enabled: gamePage.selector.gameChangesPending
+                        && !gamePage.selector.copying
+                    onClicked: gamePage.selector.applyGameChanges()
+                }
+            }
+        }
+
         ColumnLayout {
             id: gamesColumn
             width: parent.width

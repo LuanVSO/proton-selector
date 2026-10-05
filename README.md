@@ -190,14 +190,16 @@ defaults or one installed Steam game's overrides. A blank game-specific value
 inherits the global value; a blank global value leaves the variable unset.
 Per-game values are applied after global defaults, even when that game uses the
 default Proton version. Settings are saved with the managed tool and applied
-on each launch.
+on each launch. Changes remain staged until you click **Apply**; the button is
+disabled when there are no unsaved changes.
 
 ### Selecting a version for one game
 
 Open **Game Versions...** to see installed Steam games, each with a Proton
-dropdown. Changing a dropdown saves that game's version immediately; choose
-**Use Active Version** to remove its per-game override. In Steam, make sure
-that game uses **Proton Selector** as its compatibility tool.
+dropdown. Choose **Use Active Version** to remove its per-game override.
+Changes remain staged until you click **Apply**; the button is disabled when
+there are no unsaved changes. In Steam, make sure that game uses
+**Proton Selector** as its compatibility tool.
 
 When that game launches, its Game Version becomes the effective Active Version.
 Selecting another version updates the existing CSV mapping. Other games

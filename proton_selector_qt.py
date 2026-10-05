@@ -43,6 +43,8 @@ class SelectorController(QObject):
         self._wineland_variant = "normal"
         self._wineland_variant_user_selected = False
         self._pending_game_versions: dict[str, int] = {}
+        self._game_apply_queue: list[tuple[str, int]] = []
+        self._applying_game_changes = False
         self._progress_text = ""
         self._notification_title = ""
         self._notification_body = ""
@@ -52,6 +54,13 @@ class SelectorController(QObject):
         self._game_proton_environment_values = (
             self.manager.all_game_proton_environment_variables()
         )
+        self._pending_proton_environment_values = dict(
+            self._proton_environment_values
+        )
+        self._pending_game_proton_environment_values = {
+            game_id: dict(values)
+            for game_id, values in self._game_proton_environment_values.items()
+        }
         self._available_proton_environment_variables: tuple[str, ...] = ()
         self._boolean_proton_environment_variables: set[str] = set()
         self._environment_version_name = "—"
@@ -127,6 +136,19 @@ class SelectorController(QObject):
             )
         return games
 
+    @Property(bool, notify=stateChanged)
+    def gameChangesPending(self) -> bool:
+        return bool(self._pending_game_versions)
+
+    @Property(bool, notify=stateChanged)
+    def environmentChangesPending(self) -> bool:
+        return (
+            self._pending_proton_environment_values
+            != self._proton_environment_values
+            or self._pending_game_proton_environment_values
+            != self._game_proton_environment_values
+        )
+
     @Property("QVariantMap", notify=stateChanged)
     def translations(self) -> dict[str, str]:
         return dict(self.backend._.catalog)
@@ -170,14 +192,14 @@ class SelectorController(QObject):
 
     @Property("QVariantList", notify=stateChanged)
     def protonEnvironmentVariables(self) -> list[dict[str, str]]:
-        game_values = self._game_proton_environment_values.get(
+        game_values = self._pending_game_proton_environment_values.get(
             self._environment_game_id,
             {},
         )
         values = (
             game_values
             if self._environment_game_id
-            else self._proton_environment_values
+            else self._pending_proton_environment_values
         )
         return [
             {
@@ -190,10 +212,10 @@ class SelectorController(QObject):
                 "value": (
                     game_values.get(name, "")
                     if self._environment_game_id
-                    else self._proton_environment_values.get(name, "")
+                    else self._pending_proton_environment_values.get(name, "")
                 ),
                 "inheritedValue": (
-                    self._proton_environment_values.get(name, "")
+                    self._pending_proton_environment_values.get(name, "")
                     if self._environment_game_id
                     else ""
                 ),
@@ -367,29 +389,75 @@ class SelectorController(QObject):
         except RuntimeError as error:
             self._notify(str(error), error=True)
             return
-        if version_index == 0:
-            if self.manager.clear_game_mapping(normalized_game_id):
-                self._notify(
-                    f"Game {normalized_game_id} now uses the active Proton version."
-                )
-                self.stateChanged.emit()
+        if version_index < 0 or version_index > len(self.tools):
+            return
+        mapping = self.manager.game_mapping(normalized_game_id)
+        saved_index = (
+            self._tool_index_for_path(mapping.source_path) + 1
+            if mapping
+            else 0
+        )
+        if version_index == saved_index:
+            self._pending_game_versions.pop(normalized_game_id, None)
+        else:
+            self._pending_game_versions[normalized_game_id] = version_index
+        self.stateChanged.emit()
+
+    @Slot()
+    def applyGameChanges(self) -> None:
+        if self.copying or not self._pending_game_versions:
+            return
+        selected_tool = self._tool_at(self._active_index)
+        fallback_tool = self._tool_at(self._fallback_index)
+        has_version_assignments = any(
+            self._tool_at(index - 1) is None
+            for index in self._pending_game_versions.values()
+            if index > 0
+        )
+        if has_version_assignments and (
+            not selected_tool or not fallback_tool or not self.base_tool
+        ):
+            self._notify(
+                "Select valid Active and Fallback versions before applying game versions.",
+                error=True,
+            )
             return
 
+        try:
+            for game_id, index in tuple(self._pending_game_versions.items()):
+                if index == 0:
+                    self.manager.clear_game_mapping(game_id)
+                    self._pending_game_versions.pop(game_id, None)
+        except OSError as error:
+            self._notify(f"Unable to save game-version settings: {error}", error=True)
+            return
+        self._game_apply_queue = [
+            (game_id, index)
+            for game_id, index in self._pending_game_versions.items()
+        ]
+        self._applying_game_changes = bool(self._game_apply_queue)
+        self._apply_next_game_change()
+        self.stateChanged.emit()
+
+    def _apply_next_game_change(self) -> None:
+        if not self._game_apply_queue:
+            self._applying_game_changes = False
+            self.stateChanged.emit()
+            return
+        game_id, version_index = self._game_apply_queue[0]
         game_tool = self._tool_at(version_index - 1)
         selected_tool = self._tool_at(self._active_index)
         fallback_tool = self._tool_at(self._fallback_index)
-        if (
-            game_tool is None
-            or selected_tool is None
-            or fallback_tool is None
-            or self.base_tool is None
-        ):
+        if not game_tool or not selected_tool or not fallback_tool or not self.base_tool:
+            self._game_apply_queue.clear()
+            self._applying_game_changes = False
+            self._notify("Unable to apply the selected game version.", error=True)
+            self.stateChanged.emit()
             return
-        self._pending_game_versions[normalized_game_id] = version_index
         self._begin_activation(
             selected_tool,
             fallback_tool,
-            normalized_game_id,
+            game_id,
             game_tool,
         )
 
@@ -419,7 +487,7 @@ class SelectorController(QObject):
         if name not in self._available_proton_environment_variables:
             return
         if self._environment_game_id:
-            game_values = self._game_proton_environment_values.setdefault(
+            game_values = self._pending_game_proton_environment_values.setdefault(
                 self._environment_game_id,
                 {},
             )
@@ -428,25 +496,66 @@ class SelectorController(QObject):
             else:
                 game_values.pop(name, None)
             if not game_values:
-                self._game_proton_environment_values.pop(
+                self._pending_game_proton_environment_values.pop(
                     self._environment_game_id,
                     None,
                 )
-            if self.manager.tool_path.is_dir() and not self.manager.tool_path.is_symlink():
-                self.manager.save_game_proton_environment(
-                    self._environment_game_id,
-                    self._game_proton_environment_values.get(
-                        self._environment_game_id,
-                        {},
-                    ),
-                )
         else:
             if value:
-                self._proton_environment_values[name] = value
+                self._pending_proton_environment_values[name] = value
             else:
-                self._proton_environment_values.pop(name, None)
-            if self.manager.tool_path.is_dir() and not self.manager.tool_path.is_symlink():
-                self.manager.save_proton_environment(self._proton_environment_values)
+                self._pending_proton_environment_values.pop(name, None)
+        self.stateChanged.emit()
+
+    @Slot()
+    def applyEnvironmentChanges(self) -> None:
+        if self.copying or not self.environmentChangesPending:
+            return
+        try:
+            if (
+                self._pending_proton_environment_values
+                != self._proton_environment_values
+            ):
+                if (
+                    self.manager.tool_path.is_dir()
+                    and not self.manager.tool_path.is_symlink()
+                ):
+                    self.manager.save_proton_environment(
+                        self._pending_proton_environment_values
+                    )
+                self._proton_environment_values = dict(
+                    self._pending_proton_environment_values
+                )
+            changed_game_ids = {
+                *self._game_proton_environment_values,
+                *self._pending_game_proton_environment_values,
+            }
+            for game_id in changed_game_ids:
+                pending_values = self._pending_game_proton_environment_values.get(
+                    game_id,
+                    {},
+                )
+                if pending_values == self._game_proton_environment_values.get(
+                    game_id,
+                    {},
+                ):
+                    continue
+                if (
+                    self.manager.tool_path.is_dir()
+                    and not self.manager.tool_path.is_symlink()
+                ):
+                    self.manager.save_game_proton_environment(
+                        game_id,
+                        pending_values,
+                    )
+                if pending_values:
+                    self._game_proton_environment_values[game_id] = dict(
+                        pending_values
+                    )
+                else:
+                    self._game_proton_environment_values.pop(game_id, None)
+        except OSError as error:
+            self._notify(f"Unable to save Proton environment settings: {error}", error=True)
         self.stateChanged.emit()
 
     @Slot(int)
@@ -823,8 +932,23 @@ class SelectorController(QObject):
     ) -> None:
         self._copying = False
         self._progress_text = ""
-        if game_id:
+        if self._applying_game_changes:
+            if error is not None or result is None:
+                self._game_apply_queue.clear()
+                self._applying_game_changes = False
+                self.refresh()
+                self.progressChanged.emit()
+                self._notify(
+                    str(error)
+                    if error is not None
+                    else self.backend._("operation_incomplete"),
+                    error=True,
+                )
+                self.stateChanged.emit()
+                return
             self._pending_game_versions.pop(game_id, None)
+            if self._game_apply_queue and self._game_apply_queue[0][0] == game_id:
+                self._game_apply_queue.pop(0)
         self.refresh()
         self.progressChanged.emit()
         if error is not None:
@@ -852,6 +976,8 @@ class SelectorController(QObject):
         if result.first_activation:
             success_text += "\n\n" + self.backend._("restart_first")
         self._notify(success_text)
+        if self._applying_game_changes:
+            self._apply_next_game_change()
 
 
 def run_application(backend: ModuleType) -> int:
