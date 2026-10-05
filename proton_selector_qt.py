@@ -64,6 +64,7 @@ class SelectorController(QObject):
         self._available_proton_environment_variables: tuple[str, ...] = ()
         self._boolean_proton_environment_variables: set[str] = set()
         self._environment_version_name = "—"
+        self._environment_variables_text_error = ""
         language_override = os.environ.get("PROTON_SELECTOR_LANGUAGE", "")
         if language_override:
             self.language_preference = backend._.language
@@ -148,6 +149,22 @@ class SelectorController(QObject):
             or self._pending_game_proton_environment_values
             != self._game_proton_environment_values
         )
+
+    @Property(str, notify=stateChanged)
+    def environmentVariablesText(self) -> str:
+        values = (
+            self._pending_game_proton_environment_values.get(
+                self._environment_game_id,
+                {},
+            )
+            if self._environment_game_id
+            else self._pending_proton_environment_values
+        )
+        return "".join(f"{name}={values[name]}\n" for name in sorted(values))
+
+    @Property(str, notify=stateChanged)
+    def environmentVariablesTextError(self) -> str:
+        return self._environment_variables_text_error
 
     @Property("QVariantMap", notify=stateChanged)
     def translations(self) -> dict[str, str]:
@@ -505,6 +522,31 @@ class SelectorController(QObject):
                 self._pending_proton_environment_values[name] = value
             else:
                 self._pending_proton_environment_values.pop(name, None)
+        self.stateChanged.emit()
+
+    @Slot(str)
+    def setEnvironmentVariablesText(self, text: str) -> None:
+        if self.copying:
+            return
+        try:
+            values = self.backend._parse_proton_environment_text(text)
+        except ValueError as error:
+            self._environment_variables_text_error = str(error)
+            self.stateChanged.emit()
+            return
+        self._environment_variables_text_error = ""
+        if self._environment_game_id:
+            if values:
+                self._pending_game_proton_environment_values[
+                    self._environment_game_id
+                ] = values
+            else:
+                self._pending_game_proton_environment_values.pop(
+                    self._environment_game_id,
+                    None,
+                )
+        else:
+            self._pending_proton_environment_values = values
         self.stateChanged.emit()
 
     @Slot()

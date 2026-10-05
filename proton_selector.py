@@ -97,11 +97,7 @@ apply_proton_environment_file()
             *)   variable=$entry; value=1 ;;
         esac
         case "$variable" in
-            PROTON_[A-Z]*) ;;
-            *) continue ;;
-        esac
-        case "$variable" in
-            *[!A-Z0-9_]*) continue ;;
+            ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*) continue ;;
         esac
         if [ -n "$variable" ]; then
             export "$variable=$value"
@@ -176,7 +172,13 @@ export PROTON_SELECTOR_TARGET
 exec "$selected/proton" "$@"
 '''
 
-PROTON_ENVIRONMENT_VARIABLE_PATTERN = re.compile(r"\bPROTON_[A-Z][A-Z0-9_]*\b")
+PROTON_ENVIRONMENT_VARIABLE_PATTERN = re.compile(
+    r"\b(?:(?:PROTON|DXVK|VKD3D)_[A-Z][A-Z0-9_]*|WINE[A-Z0-9_]+)\b"
+)
+ENVIRONMENT_VARIABLE_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+SUPPORTED_PROTON_ENVIRONMENT_VARIABLES = frozenset(
+    {"DXVK_CONFIG", "VKD3D_CONFIG", "HOST_LC_ALL"}
+)
 PROTON_BOOLEAN_ENVIRONMENT_PATTERN = re.compile(
     r"check_environment\(\s*['\"](PROTON_[A-Z][A-Z0-9_]*)['\"]"
 )
@@ -546,7 +548,9 @@ def installed_proton_wineland_variants(compatibility_dir: Path) -> set[str]:
 
 def proton_environment_variables(proton_path: Path) -> tuple[str, ...]:
     source = _read_text(proton_path / "proton")
-    return tuple(sorted(set(PROTON_ENVIRONMENT_VARIABLE_PATTERN.findall(source))))
+    variables = set(PROTON_ENVIRONMENT_VARIABLE_PATTERN.findall(source))
+    variables.update(SUPPORTED_PROTON_ENVIRONMENT_VARIABLES)
+    return tuple(sorted(variables))
 
 
 def proton_environment_variable_types(proton_path: Path) -> dict[str, str]:
@@ -554,7 +558,7 @@ def proton_environment_variable_types(proton_path: Path) -> dict[str, str]:
     boolean_variables = set(PROTON_BOOLEAN_ENVIRONMENT_PATTERN.findall(source))
     return {
         name: "boolean" if name in boolean_variables else "string"
-        for name in sorted(set(PROTON_ENVIRONMENT_VARIABLE_PATTERN.findall(source)))
+        for name in proton_environment_variables(proton_path)
     }
 
 
@@ -1011,8 +1015,26 @@ def _read_proton_environment_file(path: Path) -> dict[str, str]:
             name, value = entry.split("=", 1)
         else:
             name, value = entry, "1"
-        if PROTON_ENVIRONMENT_VARIABLE_PATTERN.fullmatch(name):
+        if ENVIRONMENT_VARIABLE_NAME_PATTERN.fullmatch(name):
             variables[name] = value
+    return variables
+
+
+def _parse_proton_environment_text(text: str) -> dict[str, str]:
+    variables = {}
+    for line_number, entry in enumerate(text.splitlines(), start=1):
+        if not entry.strip():
+            continue
+        if "=" in entry:
+            name, value = entry.split("=", 1)
+        else:
+            name, value = entry, "1"
+        if not ENVIRONMENT_VARIABLE_NAME_PATTERN.fullmatch(name):
+            raise ValueError(
+                f"Invalid environment variable on line {line_number}. "
+                "Use NAME=value."
+            )
+        variables[name] = value
     return variables
 
 
@@ -1028,7 +1050,7 @@ def _proton_environment_file_contents(
     for name, value in entries:
         value = str(value)
         if (
-            PROTON_ENVIRONMENT_VARIABLE_PATTERN.fullmatch(name)
+            ENVIRONMENT_VARIABLE_NAME_PATTERN.fullmatch(name)
             and "\n" not in value
             and "\r" not in value
         ):

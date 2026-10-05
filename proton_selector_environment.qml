@@ -36,6 +36,11 @@ Kirigami.ApplicationWindow {
             )
         }
 
+        function refreshEnvironmentVariablesEditor() {
+            environmentVariablesEditor.text =
+                environmentPage.selector.environmentVariablesText
+        }
+
         title: "Proton Environment"
 
         footer: Controls.ToolBar {
@@ -53,6 +58,7 @@ Kirigami.ApplicationWindow {
                     text: "Apply"
                     icon.name: "dialog-ok-apply"
                     enabled: environmentPage.selector.environmentChangesPending
+                        && environmentPage.selector.environmentVariablesTextError.length === 0
                         && !environmentPage.selector.copying
                     onClicked: environmentPage.selector.applyEnvironmentChanges()
                 }
@@ -75,9 +81,12 @@ Kirigami.ApplicationWindow {
                     model: environmentPage.selector.environmentScopes
                     textRole: "label"
                     currentIndex: environmentPage.selector.environmentScopeIndex
-                    onActivated: environmentPage.selector.setEnvironmentScopeIndex(
-                        currentIndex
-                    )
+                    onActivated: {
+                        environmentPage.selector.setEnvironmentScopeIndex(
+                            currentIndex
+                        )
+                        environmentPage.refreshEnvironmentVariablesEditor()
+                    }
                     Accessible.name: "Environment variable scope"
                 }
             }
@@ -132,12 +141,15 @@ Kirigami.ApplicationWindow {
                         textRole: "label"
                         currentIndex: modelData.booleanIndex
                         enabled: !environmentPage.selector.copying
-                        onActivated: environmentPage.selector.setProtonEnvironmentVariable(
-                            modelData.name,
-                            environmentPage.selector.environmentBooleanOptions[
-                                currentIndex
-                            ].value
-                        )
+                        onActivated: {
+                            environmentPage.selector.setProtonEnvironmentVariable(
+                                modelData.name,
+                                environmentPage.selector.environmentBooleanOptions[
+                                    currentIndex
+                                ].value
+                            )
+                            environmentPage.refreshEnvironmentVariablesEditor()
+                        }
                         Controls.ToolTip.text: modelData.inheritedValue.length > 0
                             ? "Global default: " + modelData.inheritedValue
                             : ""
@@ -153,13 +165,50 @@ Kirigami.ApplicationWindow {
                             ? "Inherited: " + modelData.inheritedValue
                             : "Not set"
                         enabled: !environmentPage.selector.copying
-                        onTextEdited: environmentPage.selector.setProtonEnvironmentVariable(
-                            modelData.name,
-                            text
-                        )
+                        onTextEdited: {
+                            environmentPage.selector.setProtonEnvironmentVariable(
+                                modelData.name,
+                                text
+                            )
+                            environmentPage.refreshEnvironmentVariablesEditor()
+                        }
                         Accessible.name: modelData.name + " value"
                     }
                 }
+            }
+
+            Controls.Label {
+                Layout.fillWidth: true
+                text: "Environment variables (one per line)"
+                wrapMode: Text.WordWrap
+            }
+
+            Controls.ScrollView {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 140
+
+                Controls.TextArea {
+                    id: environmentVariablesEditor
+                    width: parent.width
+                    placeholderText: "NAME=value"
+                    wrapMode: TextEdit.Wrap
+                    enabled: !environmentPage.selector.copying
+                    Accessible.name: "Environment variables"
+                    Component.onCompleted: {
+                        text = environmentPage.selector.environmentVariablesText
+                    }
+                    onTextChanged: environmentPage.selector.setEnvironmentVariablesText(
+                        text
+                    )
+                }
+            }
+
+            Controls.Label {
+                Layout.fillWidth: true
+                visible: environmentPage.selector.environmentVariablesTextError.length > 0
+                text: environmentPage.selector.environmentVariablesTextError
+                color: Kirigami.Theme.negativeTextColor
+                wrapMode: Text.WordWrap
             }
         }
     }

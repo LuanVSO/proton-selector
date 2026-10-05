@@ -166,23 +166,43 @@ class ProtonSelectorTests(unittest.TestCase):
             self.ge_one / "proton",
             '#!/bin/sh\n[ "${PROTON_NO_FSYNC-}" ]\n'
             '[ "${PROTON_LOG_DIR-}" ]\n[ "${PROTON_CUSTOM_VALUE-}" ]\n'
+            '[ "${WINEDEBUG-}" ]\n[ "${WINEPREFIX-}" ]\n'
             'self.check_environment("PROTON_NO_FSYNC", "nofsync")\n',
         )
         write_executable(
             self.ge_two / "proton",
             '#!/bin/sh\n[ "${PROTON_USE_WINED3D-}" ]\n'
             '[ "${PROTON_FORCE_NVAPI-}" ]\n'
+            '[ "${DXVK_CONFIG-}" ]\n[ "${VKD3D_CONFIG-}" ]\n'
+            '[ "${DXVK_LOG_LEVEL-}" ]\n[ "${VKD3D_DEBUG-}" ]\n'
             'self.check_environment("PROTON_USE_WINED3D", "wined3d")\n'
             'self.check_environment("PROTON_FORCE_NVAPI", "forcenvapi")\n',
         )
 
         self.assertEqual(
             set(proton_selector.proton_environment_variables(self.ge_one)),
-            {"PROTON_NO_FSYNC", "PROTON_LOG_DIR", "PROTON_CUSTOM_VALUE"},
+            {
+                "PROTON_NO_FSYNC",
+                "PROTON_LOG_DIR",
+                "PROTON_CUSTOM_VALUE",
+                "DXVK_CONFIG",
+                "VKD3D_CONFIG",
+                "HOST_LC_ALL",
+                "WINEDEBUG",
+                "WINEPREFIX",
+            },
         )
         self.assertEqual(
             set(proton_selector.proton_environment_variables(self.ge_two)),
-            {"PROTON_USE_WINED3D", "PROTON_FORCE_NVAPI"},
+            {
+                "PROTON_USE_WINED3D",
+                "PROTON_FORCE_NVAPI",
+                "DXVK_CONFIG",
+                "VKD3D_CONFIG",
+                "HOST_LC_ALL",
+                "DXVK_LOG_LEVEL",
+                "VKD3D_DEBUG",
+            },
         )
         self.assertEqual(
             proton_selector.proton_environment_variable_types(self.ge_one),
@@ -190,6 +210,11 @@ class ProtonSelectorTests(unittest.TestCase):
                 "PROTON_NO_FSYNC": "boolean",
                 "PROTON_CUSTOM_VALUE": "string",
                 "PROTON_LOG_DIR": "string",
+                "DXVK_CONFIG": "string",
+                "VKD3D_CONFIG": "string",
+                "HOST_LC_ALL": "string",
+                "WINEDEBUG": "string",
+                "WINEPREFIX": "string",
             },
         )
         self.assertEqual(
@@ -197,6 +222,11 @@ class ProtonSelectorTests(unittest.TestCase):
             {
                 "PROTON_FORCE_NVAPI": "boolean",
                 "PROTON_USE_WINED3D": "boolean",
+                "DXVK_CONFIG": "string",
+                "VKD3D_CONFIG": "string",
+                "HOST_LC_ALL": "string",
+                "DXVK_LOG_LEVEL": "string",
+                "VKD3D_DEBUG": "string",
             },
         )
 
@@ -406,8 +436,10 @@ class ProtonSelectorTests(unittest.TestCase):
     def test_launcher_exports_proton_environment_values(self) -> None:
         write_executable(
             self.ge_one / "proton",
-            "#!/bin/sh\nprintf '%s|%s|%s\\n' "
-            '"${PROTON_NO_ESYNC-}" "${PROTON_LOG-}" "${PROTON_LOG_DIR-}"\n',
+            "#!/bin/sh\nprintf '%s|%s|%s|%s|%s|%s|%s\\n' "
+            '"${PROTON_NO_ESYNC-}" "${PROTON_LOG-}" "${PROTON_LOG_DIR-}" '
+            '"${DXVK_CONFIG-}" "${VKD3D_CONFIG-}" "${WINEDEBUG-}" '
+            '"${MANGOHUD-}"\n',
         )
         tools = proton_selector.scan_proton_tools(self.home, self.env)
         manager = proton_selector.SelectorManager(self.home, self.env)
@@ -422,7 +454,10 @@ class ProtonSelectorTests(unittest.TestCase):
                 "PROTON_NO_ESYNC": "0",
                 "PROTON_LOG": "WINEDEBUG=+all",
                 "PROTON_LOG_DIR": "/tmp/proton logs",
-                "UNKNOWN_OPTION": "ignored",
+                "DXVK_CONFIG": "/tmp/dxvk.conf",
+                "VKD3D_CONFIG": "/tmp/vkd3d.conf",
+                "WINEDEBUG": "+all",
+                "MANGOHUD": "1",
             },
         )
         completed = subprocess.run(
@@ -434,7 +469,7 @@ class ProtonSelectorTests(unittest.TestCase):
 
         self.assertEqual(
             completed.stdout,
-            "0|WINEDEBUG=+all|/tmp/proton logs\n",
+            "0|WINEDEBUG=+all|/tmp/proton logs|/tmp/dxvk.conf|/tmp/vkd3d.conf|+all|1\n",
         )
         self.assertEqual(
             manager.proton_environment_variables(),
@@ -442,11 +477,23 @@ class ProtonSelectorTests(unittest.TestCase):
                 "PROTON_NO_ESYNC": "0",
                 "PROTON_LOG": "WINEDEBUG=+all",
                 "PROTON_LOG_DIR": "/tmp/proton logs",
+                "DXVK_CONFIG": "/tmp/dxvk.conf",
+                "VKD3D_CONFIG": "/tmp/vkd3d.conf",
+                "WINEDEBUG": "+all",
+                "MANGOHUD": "1",
             },
         )
         self.assertEqual(
             manager.proton_environment_options(),
-            {"PROTON_NO_ESYNC", "PROTON_LOG", "PROTON_LOG_DIR"},
+            {
+                "PROTON_NO_ESYNC",
+                "PROTON_LOG",
+                "PROTON_LOG_DIR",
+                "DXVK_CONFIG",
+                "VKD3D_CONFIG",
+                "WINEDEBUG",
+                "MANGOHUD",
+            },
         )
 
     def test_launcher_applies_game_environment_over_global_values(self) -> None:
@@ -532,6 +579,26 @@ class ProtonSelectorTests(unittest.TestCase):
             manager.proton_environment_variables(),
             {"PROTON_NO_FSYNC": "1", "PROTON_LOG": "1"},
         )
+
+    def test_parses_environment_text_entries(self) -> None:
+        self.assertEqual(
+            proton_selector._parse_proton_environment_text(
+                "WINEDEBUG=+all\nDXVK_CONFIG=/tmp/dxvk.conf\n"
+                "VKD3D_DEBUG\nMANGOHUD=1\n"
+            ),
+            {
+                "WINEDEBUG": "+all",
+                "DXVK_CONFIG": "/tmp/dxvk.conf",
+                "VKD3D_DEBUG": "1",
+                "MANGOHUD": "1",
+            },
+        )
+
+    def test_rejects_invalid_environment_text_entries(self) -> None:
+        with self.assertRaisesRegex(ValueError, "line 2"):
+            proton_selector._parse_proton_environment_text(
+                "PROTON_LOG=1\nMANGO-HUD=1\n"
+            )
 
     def test_matching_version_file_skips_existing_managed_copy(self) -> None:
         tools = proton_selector.scan_proton_tools(self.home, self.env)
