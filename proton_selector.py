@@ -1115,6 +1115,12 @@ class SelectorManager:
     def proton_environment_options(self) -> set[str]:
         return set(self.proton_environment_variables())
 
+    def _refresh_launcher(self) -> None:
+        if not os.path.lexists(self.tool_path) or self.tool_path.is_symlink():
+            return
+        self._validate_existing_tool_path()
+        _atomic_write(self.tool_path / "proton", PROTON_LAUNCHER, mode=0o755)
+
     def save_proton_environment(
         self,
         variables: Mapping[str, str] | Iterable[str],
@@ -1123,6 +1129,7 @@ class SelectorManager:
             self.proton_environment_path,
             _proton_environment_file_contents(variables),
         )
+        self._refresh_launcher()
 
     def game_proton_environment_variables(self, game_id: str) -> dict[str, str]:
         normalized = normalize_game_id(game_id)
@@ -1155,9 +1162,11 @@ class SelectorManager:
         contents = _proton_environment_file_contents(variables)
         if not contents:
             environment_path.unlink(missing_ok=True)
+            self._refresh_launcher()
             return
         self.game_environment_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write(environment_path, contents)
+        self._refresh_launcher()
 
     def save_game_proton_environments(
         self,
@@ -1177,6 +1186,7 @@ class SelectorManager:
             self.game_environment_dir.mkdir(parents=True, exist_ok=True)
         for game_id, contents in configured.items():
             _atomic_write(self.game_environment_dir / f"{game_id}.env", contents)
+        self._refresh_launcher()
 
     def find_base(self, tools: Iterable[ProtonTool]) -> ProtonTool | None:
         exact = [tool for tool in tools if tool.display_name == self.base_name]

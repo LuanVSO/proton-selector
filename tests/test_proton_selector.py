@@ -567,6 +567,50 @@ class ProtonSelectorTests(unittest.TestCase):
             {},
         )
 
+    def test_saving_environment_updates_an_existing_launcher(self) -> None:
+        write_executable(
+            self.ge_one / "proton",
+            "#!/bin/sh\nprintf '%s\\n' \"${PROTON_LOG-}\"\n",
+        )
+        tools = proton_selector.scan_proton_tools(self.home, self.env)
+        manager = proton_selector.SelectorManager(self.home, self.env)
+        base = manager.find_base(tools)
+        selected = next(tool for tool in tools if tool.display_name == "GE-Proton One")
+        manager.activate(selected, base, base)
+        write_executable(
+            manager.tool_path / "proton",
+            '#!/bin/sh\nexec "$(dirname "$0")/selected/proton" "$@"\n',
+        )
+
+        manager.save_proton_environment({"PROTON_LOG": "global"})
+        manager.save_game_proton_environment(
+            "12345",
+            {"PROTON_LOG": "per-game"},
+        )
+
+        clean_environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in {"SteamGameId", "PROTON_SELECTOR_GAME_ID"}
+        }
+        game_launch = subprocess.run(
+            [manager.tool_path / "proton", "run"],
+            check=True,
+            capture_output=True,
+            text=True,
+            env={**clean_environment, "SteamGameId": "12345"},
+        )
+        default_launch = subprocess.run(
+            [manager.tool_path / "proton", "run"],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=clean_environment,
+        )
+
+        self.assertEqual(game_launch.stdout, "per-game\n")
+        self.assertEqual(default_launch.stdout, "global\n")
+
     def test_reads_legacy_environment_names_as_value_one(self) -> None:
         manager = proton_selector.SelectorManager(self.home, self.env)
         manager.tool_path.mkdir(parents=True)

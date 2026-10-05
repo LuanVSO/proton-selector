@@ -22,9 +22,53 @@ Kirigami.ApplicationWindow {
         }
     }
 
+    Shortcut {
+        sequence: "Home"
+        onActivated: environmentPage.scrollToBoundary(false)
+    }
+
+    Shortcut {
+        sequence: "End"
+        onActivated: environmentPage.scrollToBoundary(true)
+    }
+
+    Shortcut {
+        sequence: "PgUp"
+        onActivated: environmentPage.scrollByPage(-1)
+    }
+
+    Shortcut {
+        sequence: "PgDown"
+        onActivated: environmentPage.scrollByPage(1)
+    }
+
     pageStack.initialPage: Kirigami.ScrollablePage {
         id: environmentPage
         property var selector: environmentWindow.appController
+        function scrollToBoundary(toEnd) {
+            var minimumY = flickable.originY
+            var maximumY = Math.max(
+                minimumY,
+                minimumY + flickable.contentHeight - flickable.height
+            )
+            flickable.contentY = toEnd ? maximumY : minimumY
+        }
+
+        function scrollByPage(direction) {
+            var minimumY = flickable.originY
+            var maximumY = Math.max(
+                minimumY,
+                minimumY + flickable.contentHeight - flickable.height
+            )
+            flickable.contentY = Math.max(
+                minimumY,
+                Math.min(
+                    maximumY,
+                    flickable.contentY + direction * flickable.height
+                )
+            )
+        }
+
         property var filteredVariables: {
             var query = variableSearchField.text.trim().toLocaleLowerCase()
             return environmentPage.selector.protonEnvironmentVariables.filter(

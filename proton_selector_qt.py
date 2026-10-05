@@ -694,7 +694,7 @@ class SelectorController(QObject):
                     )
                 else:
                     self._game_proton_environment_values.pop(game_id, None)
-        except OSError as error:
+        except (OSError, RuntimeError) as error:
             self._notify(f"Unable to save Proton environment settings: {error}", error=True)
         self.environmentPendingChanged.emit()
 

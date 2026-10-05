@@ -22,10 +22,54 @@ Kirigami.ApplicationWindow {
         }
     }
 
+    Shortcut {
+        sequence: "Home"
+        onActivated: gamePage.scrollToBoundary(false)
+    }
+
+    Shortcut {
+        sequence: "End"
+        onActivated: gamePage.scrollToBoundary(true)
+    }
+
+    Shortcut {
+        sequence: "PgUp"
+        onActivated: gamePage.scrollByPage(-1)
+    }
+
+    Shortcut {
+        sequence: "PgDown"
+        onActivated: gamePage.scrollByPage(1)
+    }
+
     pageStack.initialPage: Kirigami.ScrollablePage {
         id: gamePage
         property var selector: gameWindow.appController
         property string searchQuery: gameSearchField.text.trim().toLocaleLowerCase()
+
+        function scrollToBoundary(toEnd) {
+            var minimumY = flickable.originY
+            var maximumY = Math.max(
+                minimumY,
+                minimumY + flickable.contentHeight - flickable.height
+            )
+            flickable.contentY = toEnd ? maximumY : minimumY
+        }
+
+        function scrollByPage(direction) {
+            var minimumY = flickable.originY
+            var maximumY = Math.max(
+                minimumY,
+                minimumY + flickable.contentHeight - flickable.height
+            )
+            flickable.contentY = Math.max(
+                minimumY,
+                Math.min(
+                    maximumY,
+                    flickable.contentY + direction * flickable.height
+                )
+            )
+        }
 
         title: "Installed Steam Games"
 

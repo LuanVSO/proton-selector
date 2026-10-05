@@ -195,8 +195,9 @@ menu control are omitted from this editor. Click **Cancel** to discard all
 unsaved environment changes across global and per-game settings.
 Per-game values are applied after global defaults, even when that game uses
 the default Proton version. Settings are saved with the managed tool and
-applied on each launch. Changes remain staged until you click **Apply**; the
-button is disabled when there are no unsaved changes.
+applied on each launch. Applying changes also refreshes the managed launcher,
+so no Proton version change is needed. Changes remain staged until you click
+**Apply**; the button is disabled when there are no unsaved changes.
 
 ### Selecting a version for one game
 
