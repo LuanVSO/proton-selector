@@ -73,6 +73,21 @@ Kirigami.ApplicationWindow {
 
         title: "Installed Steam Games"
 
+        header: Controls.ToolBar {
+            padding: Kirigami.Units.largeSpacing
+
+            RowLayout {
+                anchors.fill: parent
+
+                Controls.TextField {
+                    id: gameSearchField
+                    Layout.fillWidth: true
+                    placeholderText: "Search games by name or ID"
+                    Accessible.name: placeholderText
+                }
+            }
+        }
+
         footer: Controls.ToolBar {
             padding: Kirigami.Units.smallSpacing
 
@@ -102,13 +117,6 @@ Kirigami.ApplicationWindow {
             // Capture these here so delegates never touch gamePage
             readonly property var selector: gameWindow.appController
             readonly property string searchQuery: gameSearchField.text.trim().toLocaleLowerCase()
-
-            Controls.TextField {
-                id: gameSearchField
-                Layout.fillWidth: true
-                placeholderText: "Search games by name or ID"
-                Accessible.name: placeholderText
-            }
 
             Controls.Label {
                 Layout.fillWidth: true

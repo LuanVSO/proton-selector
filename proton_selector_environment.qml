@@ -89,6 +89,49 @@ Kirigami.ApplicationWindow {
 
         title: "Proton Environment"
 
+        header: Controls.ToolBar {
+            padding: Kirigami.Units.largeSpacing
+
+            RowLayout {
+                anchors.fill: parent
+                spacing: Kirigami.Units.largeSpacing
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: Kirigami.Units.largeSpacing
+
+                    RowLayout {
+                        Layout.fillWidth: true
+
+                        Controls.Label {
+                            text: "Apply to"
+                        }
+
+                        Controls.ComboBox {
+                            Layout.fillWidth: true
+                            model: environmentPage.selector.environmentScopes
+                            textRole: "label"
+                            currentIndex: environmentPage.selector.environmentScopeIndex
+                            onActivated: {
+                                environmentPage.selector.setEnvironmentScopeIndex(
+                                    currentIndex
+                                )
+                                environmentPage.refreshEnvironmentVariablesEditor()
+                            }
+                            Accessible.name: "Environment variable scope"
+                        }
+                    }
+
+                    Controls.TextField {
+                        id: variableSearchField
+                        Layout.fillWidth: true
+                        placeholderText: "Search variables or values"
+                        Accessible.name: placeholderText
+                    }
+                }
+            }
+        }
+
         footer: Controls.ToolBar {
             padding: Kirigami.Units.smallSpacing
 
@@ -127,35 +170,6 @@ Kirigami.ApplicationWindow {
         ColumnLayout {
             width: environmentPage.width
             spacing: Kirigami.Units.largeSpacing
-
-            RowLayout {
-                Layout.fillWidth: true
-
-                Controls.Label {
-                    text: "Apply to"
-                }
-
-                Controls.ComboBox {
-                    Layout.fillWidth: true
-                    model: environmentPage.selector.environmentScopes
-                    textRole: "label"
-                    currentIndex: environmentPage.selector.environmentScopeIndex
-                    onActivated: {
-                        environmentPage.selector.setEnvironmentScopeIndex(
-                            currentIndex
-                        )
-                        environmentPage.refreshEnvironmentVariablesEditor()
-                    }
-                    Accessible.name: "Environment variable scope"
-                }
-            }
-
-            Controls.TextField {
-                id: variableSearchField
-                Layout.fillWidth: true
-                placeholderText: "Search variables or values"
-                Accessible.name: placeholderText
-            }
 
             Controls.Label {
                 Layout.fillWidth: true
