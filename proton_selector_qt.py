@@ -17,6 +17,14 @@ from PySide6.QtQuickControls2 import QQuickStyle
 
 class SelectorController(QObject):
     stateChanged = Signal()
+    environmentVariablesChanged = Signal()
+    environmentPendingChanged = Signal()
+    environmentTextChanged = Signal()
+    environmentTextErrorChanged = Signal()
+    environmentScopesChanged = Signal()
+    environmentScopeIndexChanged = Signal()
+    environmentBooleanOptionsChanged = Signal()
+    environmentVersionChanged = Signal()
     notificationChanged = Signal()
     progressChanged = Signal()
     _copyProgress = Signal(str)
@@ -146,7 +154,7 @@ class SelectorController(QObject):
     def gameChangesPending(self) -> bool:
         return bool(self._pending_game_versions)
 
-    @Property(bool, notify=stateChanged)
+    @Property(bool, notify=environmentPendingChanged)
     def environmentChangesPending(self) -> bool:
         return (
             self._pending_proton_environment_values
@@ -155,7 +163,7 @@ class SelectorController(QObject):
             != self._game_proton_environment_values
         )
 
-    @Property(str, notify=stateChanged)
+    @Property(str, notify=environmentTextChanged)
     def environmentVariablesText(self) -> str:
         values = (
             self._pending_game_proton_environment_values.get(
@@ -165,9 +173,13 @@ class SelectorController(QObject):
             if self._environment_game_id
             else self._pending_proton_environment_values
         )
-        return "".join(f"{name}={values[name]}\n" for name in sorted(values))
+        return "".join(
+            f"{name}={values[name]}\n"
+            for name in sorted(values)
+            if name not in self._available_proton_environment_variables
+        )
 
-    @Property(str, notify=stateChanged)
+    @Property(str, notify=environmentTextErrorChanged)
     def environmentVariablesTextError(self) -> str:
         return self._environment_variables_text_error
 
@@ -175,7 +187,7 @@ class SelectorController(QObject):
     def translations(self) -> dict[str, str]:
         return dict(self.backend._.catalog)
 
-    @Property("QVariantList", notify=stateChanged)
+    @Property("QVariantList", notify=environmentScopesChanged)
     def environmentScopes(self) -> list[dict[str, str]]:
         return [
             {"gameId": "", "label": "All games (default)"},
@@ -188,7 +200,7 @@ class SelectorController(QObject):
             ],
         ]
 
-    @Property(int, notify=stateChanged)
+    @Property(int, notify=environmentScopeIndexChanged)
     def environmentScopeIndex(self) -> int:
         return next(
             (
@@ -199,7 +211,7 @@ class SelectorController(QObject):
             0,
         )
 
-    @Property("QVariantList", notify=stateChanged)
+    @Property("QVariantList", notify=environmentBooleanOptionsChanged)
     def environmentBooleanOptions(self) -> list[dict[str, str]]:
         inherited_label = (
             "Inherit global"
@@ -212,7 +224,7 @@ class SelectorController(QObject):
             {"value": "0", "label": "False"},
         ]
 
-    @Property("QVariantList", notify=stateChanged)
+    @Property("QVariantList", notify=environmentVariablesChanged)
     def protonEnvironmentVariables(self) -> list[dict[str, str]]:
         game_values = self._pending_game_proton_environment_values.get(
             self._environment_game_id,
@@ -261,7 +273,7 @@ class SelectorController(QObject):
             return 2
         return 1
 
-    @Property(str, notify=stateChanged)
+    @Property(str, notify=environmentVersionChanged)
     def activeVersionName(self) -> str:
         return self._environment_version_name
 
@@ -389,6 +401,9 @@ class SelectorController(QObject):
         self._active_index = index if self._tool_at(index) else -1
         self._update_proton_environment_variables()
         self.stateChanged.emit()
+        self.environmentVariablesChanged.emit()
+        self.environmentTextChanged.emit()
+        self.environmentVersionChanged.emit()
 
     @Slot(int)
     def setFallbackIndex(self, index: int) -> None:
@@ -509,10 +524,12 @@ class SelectorController(QObject):
         if name not in self._available_proton_environment_variables:
             return
         if self._environment_game_id:
-            game_values = self._pending_game_proton_environment_values.setdefault(
-                self._environment_game_id,
-                {},
+            current_game_values = self._pending_game_proton_environment_values.get(
+                self._environment_game_id, {}
             )
+            if current_game_values.get(name, "") == value:
+                return
+            game_values = dict(current_game_values)
             if value:
                 game_values[name] = value
             else:
@@ -522,12 +539,18 @@ class SelectorController(QObject):
                     self._environment_game_id,
                     None,
                 )
+            else:
+                self._pending_game_proton_environment_values[
+                    self._environment_game_id
+                ] = game_values
         else:
+            if self._pending_proton_environment_values.get(name, "") == value:
+                return
             if value:
                 self._pending_proton_environment_values[name] = value
             else:
                 self._pending_proton_environment_values.pop(name, None)
-        self.stateChanged.emit()
+        self.environmentPendingChanged.emit()
 
     @Slot(str)
     def setEnvironmentVariablesText(self, text: str) -> None:
@@ -536,9 +559,29 @@ class SelectorController(QObject):
         try:
             values = self.backend._parse_proton_environment_text(text)
         except ValueError as error:
+            if self._environment_variables_text_error == str(error):
+                return
             self._environment_variables_text_error = str(error)
-            self.stateChanged.emit()
+            self.environmentTextErrorChanged.emit()
             return
+        current_values = (
+            self._pending_game_proton_environment_values.get(
+                self._environment_game_id,
+                {},
+            )
+            if self._environment_game_id
+            else self._pending_proton_environment_values
+        )
+        values.update(
+            {
+                name: value
+                for name, value in current_values.items()
+                if name in self._available_proton_environment_variables
+            }
+        )
+        if values == current_values and not self._environment_variables_text_error:
+            return
+        had_error = bool(self._environment_variables_text_error)
         self._environment_variables_text_error = ""
         if self._environment_game_id:
             if values:
@@ -552,7 +595,57 @@ class SelectorController(QObject):
                 )
         else:
             self._pending_proton_environment_values = values
-        self.stateChanged.emit()
+        self.environmentPendingChanged.emit()
+        if had_error:
+            self.environmentTextErrorChanged.emit()
+
+    @Slot()
+    def cancelEnvironmentChanges(self) -> None:
+        if self.copying:
+            return
+        pending_changed = self.environmentChangesPending
+        current_values = (
+            self._pending_game_proton_environment_values.get(
+                self._environment_game_id,
+                {},
+            )
+            if self._environment_game_id
+            else self._pending_proton_environment_values
+        )
+        saved_values = (
+            self._game_proton_environment_values.get(
+                self._environment_game_id,
+                {},
+            )
+            if self._environment_game_id
+            else self._proton_environment_values
+        )
+        variables_changed = current_values != saved_values
+        editor_values_changed = {
+            name: value
+            for name, value in current_values.items()
+            if name not in self._available_proton_environment_variables
+        } != {
+            name: value
+            for name, value in saved_values.items()
+            if name not in self._available_proton_environment_variables
+        }
+        error_changed = bool(self._environment_variables_text_error)
+        self._pending_proton_environment_values = dict(
+            self._proton_environment_values
+        )
+        self._pending_game_proton_environment_values = dict(
+            self._game_proton_environment_values
+        )
+        self._environment_variables_text_error = ""
+        if variables_changed:
+            self.environmentVariablesChanged.emit()
+        if pending_changed:
+            self.environmentPendingChanged.emit()
+        if editor_values_changed:
+            self.environmentTextChanged.emit()
+        if error_changed:
+            self.environmentTextErrorChanged.emit()
 
     @Slot()
     def applyEnvironmentChanges(self) -> None:
@@ -603,16 +696,22 @@ class SelectorController(QObject):
                     self._game_proton_environment_values.pop(game_id, None)
         except OSError as error:
             self._notify(f"Unable to save Proton environment settings: {error}", error=True)
-        self.stateChanged.emit()
+        self.environmentPendingChanged.emit()
 
     @Slot(int)
     def setEnvironmentScopeIndex(self, index: int) -> None:
         scopes = self.environmentScopes
         if self.copying or index < 0 or index >= len(scopes):
             return
+        if self._environment_game_id == scopes[index]["gameId"]:
+            return
         self._environment_game_id = scopes[index]["gameId"]
         self._update_proton_environment_variables()
-        self.stateChanged.emit()
+        self.environmentVariablesChanged.emit()
+        self.environmentTextChanged.emit()
+        self.environmentScopeIndexChanged.emit()
+        self.environmentBooleanOptionsChanged.emit()
+        self.environmentVersionChanged.emit()
 
     @Slot()
     def refresh(self) -> None:
@@ -670,6 +769,14 @@ class SelectorController(QObject):
         self._sync_wineland_variant()
         self._update_proton_environment_variables()
         self.stateChanged.emit()
+        self.environmentVariablesChanged.emit()
+        self.environmentPendingChanged.emit()
+        self.environmentTextChanged.emit()
+        self.environmentTextErrorChanged.emit()
+        self.environmentScopesChanged.emit()
+        self.environmentScopeIndexChanged.emit()
+        self.environmentBooleanOptionsChanged.emit()
+        self.environmentVersionChanged.emit()
 
     @Slot()
     def activateSelected(self) -> None:

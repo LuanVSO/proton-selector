@@ -37,8 +37,10 @@ Kirigami.ApplicationWindow {
         }
 
         function refreshEnvironmentVariablesEditor() {
-            environmentVariablesEditor.text =
-                environmentPage.selector.environmentVariablesText
+            var value = environmentPage.selector.environmentVariablesText
+            if (environmentVariablesEditor.text !== value) {
+                environmentVariablesEditor.text = value
+            }
         }
 
         title: "Proton Environment"
@@ -52,6 +54,19 @@ Kirigami.ApplicationWindow {
 
                 Item {
                     Layout.fillWidth: true
+                }
+
+                Controls.Button {
+                    text: "Cancel"
+                    icon.name: "dialog-cancel"
+                    enabled: (
+                        environmentPage.selector.environmentChangesPending
+                        || environmentPage.selector.environmentVariablesTextError.length > 0
+                    ) && !environmentPage.selector.copying
+                    onClicked: {
+                        environmentPage.selector.cancelEnvironmentChanges()
+                        environmentPage.refreshEnvironmentVariablesEditor()
+                    }
                 }
 
                 Controls.Button {
@@ -148,7 +163,6 @@ Kirigami.ApplicationWindow {
                                     currentIndex
                                 ].value
                             )
-                            environmentPage.refreshEnvironmentVariablesEditor()
                         }
                         Controls.ToolTip.text: modelData.inheritedValue.length > 0
                             ? "Global default: " + modelData.inheritedValue
@@ -170,7 +184,6 @@ Kirigami.ApplicationWindow {
                                 modelData.name,
                                 text
                             )
-                            environmentPage.refreshEnvironmentVariablesEditor()
                         }
                         Accessible.name: modelData.name + " value"
                     }

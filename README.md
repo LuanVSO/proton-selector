@@ -190,7 +190,9 @@ values such as paths or debug settings. Use **Apply to** to edit global
 defaults or one installed Steam game's overrides. A blank game-specific value
 inherits the global value; a blank global value leaves the variable unset.
 The multiline editor at the bottom accepts one `NAME=value` assignment per
-line; a bare variable name sets its value to `1`.
+line; a bare variable name sets its value to `1`. Variables with a dedicated
+menu control are omitted from this editor. Click **Cancel** to discard all
+unsaved environment changes across global and per-game settings.
 Per-game values are applied after global defaults, even when that game uses
 the default Proton version. Settings are saved with the managed tool and
 applied on each launch. Changes remain staged until you click **Apply**; the
