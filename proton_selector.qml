@@ -179,6 +179,15 @@ Kirigami.ApplicationWindow {
                 }
             }
 
+            Controls.Label {
+                Layout.fillWidth: true
+                visible: page.selector.winelandChangelogUrl.length > 0
+                text: '<a href="' + page.selector.winelandChangelogUrl
+                    + '">View Proton Wineland changelog</a>'
+                textFormat: Text.RichText
+                onLinkActivated: link => Qt.openUrlExternally(link)
+            }
+
             Controls.ProgressBar {
                 Layout.fillWidth: true
                 visible: page.selector.copying

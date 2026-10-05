@@ -42,6 +42,7 @@ class SelectorController(QObject):
         self._wineland_updating = False
         self._wineland_variant = "normal"
         self._wineland_variant_user_selected = False
+        self._wineland_changelog_url = ""
         self._pending_game_versions: dict[str, int] = {}
         self._game_apply_queue: list[tuple[str, int]] = []
         self._applying_game_changes = False
@@ -105,6 +106,10 @@ class SelectorController(QObject):
     @Property(bool, notify=stateChanged)
     def winelandUpdating(self) -> bool:
         return self._wineland_updating
+
+    @Property(str, notify=stateChanged)
+    def winelandChangelogUrl(self) -> str:
+        return self._wineland_changelog_url
 
     @Property("QVariantList", notify=stateChanged)
     def gameVersionOptions(self) -> list[dict[str, str]]:
@@ -761,6 +766,7 @@ class SelectorController(QObject):
         if self.copying:
             return
         self._wineland_updating = True
+        self._wineland_changelog_url = ""
         self._notification_visible = False
         self._progress_text = "Checking the latest Proton Wineland release..."
         self.stateChanged.emit()
@@ -793,6 +799,11 @@ class SelectorController(QObject):
     ) -> None:
         self._wineland_updating = False
         self._progress_text = ""
+        self._wineland_changelog_url = (
+            f"{self.backend.WINELAND_RELEASE_URL}{tag}"
+            if tag is not None
+            else ""
+        )
         self.refresh()
         self.progressChanged.emit()
         if error is not None:

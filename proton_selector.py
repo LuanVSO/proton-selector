@@ -185,6 +185,9 @@ PROTON_BOOLEAN_ENVIRONMENT_PATTERN = re.compile(
 WINELAND_RELEASE_API = (
     "https://api.github.com/repos/nanomatters/proton-cachyos/releases/latest"
 )
+WINELAND_RELEASE_URL = (
+    "https://github.com/nanomatters/proton-cachyos/releases/tag/"
+)
 WINELAND_INSTALLS = {
     "normal": ("Proton Wineland", "Proton Wineland"),
     "v3": ("Proton Wineland v3", "Proton Wineland v3"),
