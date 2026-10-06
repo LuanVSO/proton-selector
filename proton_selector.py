@@ -13,6 +13,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import sys
 import tarfile
@@ -38,6 +39,7 @@ ENV_COMPAT_DIR = "PROTON_SELECTOR_COMPAT_DIR"
 ENV_DATA_HOME = "PROTON_SELECTOR_DATA_HOME"
 COPY_METADATA = ".proton-selector-source.json"
 GAME_MAPPINGS_CSV = "game-mappings.csv"
+PROTON_ENVIRONMENT_FILE_HEADER = "# Proton Selector shell environment v1"
 LANGUAGE_PREFERENCE = "language"
 GAME_MAPPING_FIELDS = (
     "game_id",
@@ -62,7 +64,7 @@ COMPATIBILITY_TOOL_VDF = '''"compatibilitytools"
 }
 '''
 
-PROTON_LAUNCHER = r'''#!/bin/sh
+PROTON_LAUNCHER = r'''#!/bin/bash
 set -eu
 
 selector_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
@@ -85,24 +87,6 @@ lookup_game_copy()
     [ -x "$candidate/proton" ] || return 1
     selected="$candidate"
     return 0
-}
-
-apply_proton_environment_file()
-{
-    environment_file=$1
-    [ -f "$environment_file" ] || return 0
-    while IFS= read -r entry || [ -n "$entry" ]; do
-        case "$entry" in
-            *=*) variable=${entry%%=*}; value=${entry#*=} ;;
-            *)   variable=$entry; value=1 ;;
-        esac
-        case "$variable" in
-            ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*) continue ;;
-        esac
-        if [ -n "$variable" ]; then
-            export "$variable=$value"
-        fi
-    done < "$environment_file"
 }
 
 launch_game_id=""
@@ -159,13 +143,17 @@ if [ "${STEAM_COMPAT_TOOL_PATH+x}" = x ]; then
     export STEAM_COMPAT_TOOL_PATH
 fi
 
-apply_proton_environment_file "$selector_dir/proton-environment"
+set -a
+if [ -f "$selector_dir/proton-environment" ]; then
+    source "$selector_dir/proton-environment"
+fi
 if [ -n "$launch_game_id" ]; then
     PROTON_SELECTOR_GAME_ID="$launch_game_id"
-    export PROTON_SELECTOR_GAME_ID
-    apply_proton_environment_file \
-        "$selector_dir/game-environment/$launch_game_id.env"
+    if [ -f "$selector_dir/game-environment/$launch_game_id.env" ]; then
+        source "$selector_dir/game-environment/$launch_game_id.env"
+    fi
 fi
+set +a
 
 PROTON_SELECTOR_TARGET="$selected"
 export PROTON_SELECTOR_TARGET
@@ -1009,12 +997,30 @@ def _source_metadata(tool: ProtonTool) -> dict[str, object]:
 
 def _read_proton_environment_file(path: Path) -> dict[str, str]:
     try:
-        entries = path.read_text(encoding="utf-8").splitlines()
+        contents = path.read_text(encoding="utf-8")
     except OSError:
         return {}
+    return _parse_proton_environment_file_contents(contents)
+
+
+def _parse_proton_environment_file_contents(contents: str) -> dict[str, str]:
+    entries = contents.splitlines()
+    shell_file = bool(
+        entries and entries[0] == PROTON_ENVIRONMENT_FILE_HEADER
+    )
+    if shell_file:
+        entries = entries[1:]
     variables = {}
     for entry in entries:
-        if "=" in entry:
+        if shell_file:
+            try:
+                fields = shlex.split(entry, comments=False, posix=True)
+            except ValueError:
+                continue
+            if len(fields) != 1 or "=" not in fields[0]:
+                continue
+            name, value = fields[0].split("=", 1)
+        elif "=" in entry:
             name, value = entry.split("=", 1)
         else:
             name, value = entry, "1"
@@ -1054,11 +1060,16 @@ def _proton_environment_file_contents(
         value = str(value)
         if (
             ENVIRONMENT_VARIABLE_NAME_PATTERN.fullmatch(name)
-            and "\n" not in value
-            and "\r" not in value
+            and not any(character in value for character in "\n\r\0")
         ):
             configured[name] = value
-    return "".join(f"{name}={configured[name]}\n" for name in sorted(configured))
+    if not configured:
+        return ""
+    entries = ""
+    for name in sorted(configured):
+        escaped_value = configured[name].replace("'", "'\\''")
+        entries += f"{name}='{escaped_value}'\n"
+    return f"{PROTON_ENVIRONMENT_FILE_HEADER}\n{entries}"
 
 
 def _copy_is_current(destination: Path, tool: ProtonTool) -> bool:
@@ -1108,6 +1119,25 @@ class SelectorManager:
         self.proton_environment_path = self.tool_path / "proton-environment"
         self.game_environment_dir = self.tool_path / "game-environment"
         self.legacy_adapter_path = data_home(self.home, self.env) / "tool"
+        self._migrate_environment_file(self.proton_environment_path)
+        if self.game_environment_dir.is_dir():
+            for environment_path in self.game_environment_dir.glob("*.env"):
+                self._migrate_environment_file(environment_path)
+
+    @staticmethod
+    def _migrate_environment_file(path: Path) -> None:
+        try:
+            contents = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return
+        if contents.startswith(PROTON_ENVIRONMENT_FILE_HEADER + "\n"):
+            return
+        _atomic_write(
+            path,
+            _proton_environment_file_contents(
+                _parse_proton_environment_file_contents(contents)
+            ),
+        )
 
     def proton_environment_variables(self) -> dict[str, str]:
         return _read_proton_environment_file(self.proton_environment_path)

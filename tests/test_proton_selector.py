@@ -434,12 +434,15 @@ class ProtonSelectorTests(unittest.TestCase):
         self.assertIn("using fallback", completed.stderr)
 
     def test_launcher_exports_proton_environment_values(self) -> None:
+        literal_value = (
+            f"$(touch {self.root / 'environment-injection'}) 'quoted' $HOME"
+        )
         write_executable(
             self.ge_one / "proton",
-            "#!/bin/sh\nprintf '%s|%s|%s|%s|%s|%s|%s\\n' "
+            "#!/bin/sh\nprintf '%s|%s|%s|%s|%s|%s|%s|%s\\n' "
             '"${PROTON_NO_ESYNC-}" "${PROTON_LOG-}" "${PROTON_LOG_DIR-}" '
             '"${DXVK_CONFIG-}" "${VKD3D_CONFIG-}" "${WINEDEBUG-}" '
-            '"${MANGOHUD-}"\n',
+            '"${MANGOHUD-}" "${PROTON_SELECTOR_LITERAL-}"\n',
         )
         tools = proton_selector.scan_proton_tools(self.home, self.env)
         manager = proton_selector.SelectorManager(self.home, self.env)
@@ -458,6 +461,7 @@ class ProtonSelectorTests(unittest.TestCase):
                 "VKD3D_CONFIG": "/tmp/vkd3d.conf",
                 "WINEDEBUG": "+all",
                 "MANGOHUD": "1",
+                "PROTON_SELECTOR_LITERAL": literal_value,
             },
         )
         completed = subprocess.run(
@@ -469,8 +473,10 @@ class ProtonSelectorTests(unittest.TestCase):
 
         self.assertEqual(
             completed.stdout,
-            "0|WINEDEBUG=+all|/tmp/proton logs|/tmp/dxvk.conf|/tmp/vkd3d.conf|+all|1\n",
+            "0|WINEDEBUG=+all|/tmp/proton logs|/tmp/dxvk.conf|"
+            f"/tmp/vkd3d.conf|+all|1|{literal_value}\n",
         )
+        self.assertFalse((self.root / "environment-injection").exists())
         self.assertEqual(
             manager.proton_environment_variables(),
             {
@@ -481,6 +487,7 @@ class ProtonSelectorTests(unittest.TestCase):
                 "VKD3D_CONFIG": "/tmp/vkd3d.conf",
                 "WINEDEBUG": "+all",
                 "MANGOHUD": "1",
+                "PROTON_SELECTOR_LITERAL": literal_value,
             },
         )
         self.assertEqual(
@@ -493,7 +500,80 @@ class ProtonSelectorTests(unittest.TestCase):
                 "VKD3D_CONFIG",
                 "WINEDEBUG",
                 "MANGOHUD",
+                "PROTON_SELECTOR_LITERAL",
             },
+        )
+
+    def test_launcher_migrates_legacy_environment_files_before_sourcing(self) -> None:
+        injection_marker = self.root / "legacy-environment-injection"
+        literal_value = f"$(touch {injection_marker}) 'quoted' $HOME"
+        write_executable(
+            self.ge_one / "proton",
+            "#!/bin/sh\nprintf '%s|%s|%s|%s\\n' "
+            '"${PROTON_LOG_DIR-}" "${PROTON_SELECTOR_LITERAL-}" '
+            '"${PROTON_HUD-}" "${PROTON_SELECTOR_GAME_ID-}"\n',
+        )
+        tools = proton_selector.scan_proton_tools(self.home, self.env)
+        manager = proton_selector.SelectorManager(self.home, self.env)
+        base = manager.find_base(tools)
+        selected = next(
+            tool for tool in tools if tool.display_name == "GE-Proton One"
+        )
+        manager.activate(selected, base, base)
+
+        manager.proton_environment_path.write_text(
+            f"PROTON_LOG_DIR=/tmp/proton logs\n"
+            f"PROTON_SELECTOR_LITERAL={literal_value}\n",
+            encoding="utf-8",
+        )
+        legacy_game_environment = (
+            manager.game_environment_dir / "12345.env"
+        )
+        legacy_game_environment.parent.mkdir(parents=True, exist_ok=True)
+        legacy_game_environment.write_text(
+            "PROTON_HUD=game value\n",
+            encoding="utf-8",
+        )
+
+        manager = proton_selector.SelectorManager(self.home, self.env)
+        clean_environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key
+            not in {
+                "SteamGameId",
+                "GAMEID",
+                "UMU_ID",
+                "STEAM_COMPAT_APP_ID",
+                "SteamAppId",
+                "PROTON_LOG_DIR",
+                "PROTON_SELECTOR_LITERAL",
+                "PROTON_HUD",
+                "PROTON_SELECTOR_GAME_ID",
+            }
+        }
+        completed = subprocess.run(
+            [manager.tool_path / "proton", "run"],
+            check=True,
+            capture_output=True,
+            text=True,
+            env={**clean_environment, "SteamGameId": "12345"},
+        )
+
+        self.assertEqual(
+            completed.stdout,
+            f"/tmp/proton logs|{literal_value}|game value|12345\n",
+        )
+        self.assertFalse(injection_marker.exists())
+        self.assertTrue(
+            manager.proton_environment_path.read_text(
+                encoding="utf-8"
+            ).startswith(proton_selector.PROTON_ENVIRONMENT_FILE_HEADER)
+        )
+        self.assertTrue(
+            legacy_game_environment.read_text(
+                encoding="utf-8"
+            ).startswith(proton_selector.PROTON_ENVIRONMENT_FILE_HEADER)
         )
 
     def test_launcher_applies_game_environment_over_global_values(self) -> None:
