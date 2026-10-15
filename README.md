@@ -174,7 +174,7 @@ Version. No Steam restart is needed when either selection changes.
 
 Choose **Normal**, **_v3**, or **_wow64** and click **Update** to install the
 latest matching Proton Wineland release from
-[nanomatters/proton-cachyos](https://github.com/nanomatters/proton-cachyos/releases).
+[nanomatters/proton-salkim](https://github.com/nanomatters/proton-salkim/releases).
 The download is checked against GitHub's SHA-256 digest before installation.
 After updating, select the installed Proton Wineland entry as the Active
 Version and apply it with **Use Selected Version**.

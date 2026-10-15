@@ -259,7 +259,7 @@ class ProtonSelectorTests(unittest.TestCase):
                     {
                         "name": asset_name,
                         "browser_download_url": (
-                            "https://github.com/nanomatters/proton-cachyos/"
+                            "https://github.com/nanomatters/proton-salkim/"
                             f"releases/download/{tag}/{asset_name}"
                         ),
                         "digest": f"sha256:{hashlib.sha256(archive_data).hexdigest()}",
@@ -316,7 +316,7 @@ class ProtonSelectorTests(unittest.TestCase):
                     {
                         "name": asset_name,
                         "browser_download_url": (
-                            "https://github.com/nanomatters/proton-cachyos/"
+                            "https://github.com/nanomatters/proton-salkim/"
                             f"releases/download/{tag}/{asset_name}"
                         ),
                     }

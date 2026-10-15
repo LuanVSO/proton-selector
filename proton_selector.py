@@ -171,10 +171,10 @@ PROTON_BOOLEAN_ENVIRONMENT_PATTERN = re.compile(
     r"check_environment\(\s*['\"](PROTON_[A-Z][A-Z0-9_]*)['\"]"
 )
 WINELAND_RELEASE_API = (
-    "https://api.github.com/repos/nanomatters/proton-cachyos/releases/latest"
+    "https://api.github.com/repos/nanomatters/proton-salkim/releases/latest"
 )
 WINELAND_RELEASE_URL = (
-    "https://github.com/nanomatters/proton-cachyos/releases/tag/"
+    "https://github.com/nanomatters/proton-salkim/releases/tag/"
 )
 WINELAND_INSTALLS = {
     "normal": ("Proton Wineland", "Proton Wineland"),
@@ -741,7 +741,7 @@ def install_proton_wineland(
         parsed_url.scheme != "https"
         or parsed_url.hostname != "github.com"
         or not parsed_url.path.startswith(
-            f"/nanomatters/proton-cachyos/releases/download/{tag}/"
+            f"/nanomatters/proton-salkim/releases/download/{tag}/"
         )
     ):
         raise RuntimeError("GitHub returned an invalid Proton Wineland download URL.")
